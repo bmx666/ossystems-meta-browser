@@ -4,7 +4,7 @@ HOMEPAGE = "https://www.chromium.org/Home"
 CVE_PRODUCT = "chromium:chromium google:chrome"
 
 SRC_URI = "https://commondatastorage.googleapis.com/chromium-browser-official/chromium-${PV}.tar.xz"
-SRC_URI[sha256sum] = "1cba0527c951e3c506ade96cf6ec2507ee9d43661764731ed896348182369262"
+SRC_URI[sha256sum] = "c479aa28c45d70b4dafecced60368dc28aa27607dc761560810379d12952bd77"
 
 S = "${WORKDIR}/chromium-${PV}"
 
@@ -57,8 +57,8 @@ LICENSE = "BSD-3-Clause & LGPL-2.0-or-later & LGPL-2.1-or-later"
 
 # The generate_license_list.py script can help generate and update this list.
 LIC_FILES_CHKSUM = "\
-    file://${S}/LICENSE;md5=0fca02217a5d49a14dfe2d11837bb34d \
-    file://${S}/LICENSE.chromium_os;md5=87dd8458232da630f5617873d42d8350 \
+    file://${S}/LICENSE;md5=c408a301e3407c3803499ce9290515d6 \
+    file://${S}/LICENSE.chromium_os;md5=775979d3e1e3bf163e4882e231727de5 \
     file://${S}/base/third_party/cityhash/COPYING;md5=f714c995c5bd9b175938acdd69226b60 \
     file://${S}/base/third_party/cityhash_v103/COPYING;md5=f714c995c5bd9b175938acdd69226b60 \
     file://${S}/base/third_party/double_conversion/LICENSE;md5=1ea35644f0ec0d9767897115667e901f \
@@ -399,7 +399,7 @@ LIC_FILES_CHKSUM = "\
     file://${S}/third_party/zxcvbn-cpp/LICENSE.txt;md5=50f9303d0b3adb4952217b0d8c00d83f \
     file://${S}/tools/mac/power/protos/third_party/pprof/LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd57 \
     file://${S}/url/third_party/mozilla/LICENSE.txt;md5=437ced1e9b232651b0912a9594da43b2 \
-    file://${S}/v8/LICENSE;md5=6611673a9587a522034a4be8f4df564c \
+    file://${S}/v8/LICENSE;md5=f38a2942edcfe4abb45e9a83a1ad2f82 \
     file://${S}/v8/LICENSE.fdlibm;md5=b17367d6c97e638599071d99a3049dfe \
     file://${S}/v8/LICENSE.strongtalk;md5=956a43818dd13f2e93088fc2c93589d2 \
     "

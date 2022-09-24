@@ -20,7 +20,6 @@ SRC_URI += " \
     file://0008-avoid-link-latomic-failure-on-CentOS-8-host.patch \
     file://0009-nomerge-attribute-on-declaration-is-only-available-s.patch \
     file://0011-Revert-Use-ffile-compilation-dir-instead-of-fdebug-c.patch \
-    file://0012-Build-X11-parts-only-for-ozone_platform_x11.patch \
     file://0013-Fix-html_minifier-script-for-node-v12.patch \
     file://0014-IWYU-add-memory-for-std-unique_ptr-in-disk_cache-Bit.patch \
 "
