@@ -23,6 +23,8 @@ SRC_URI += " \
     file://0012-ozone-wayland-don-t-build-xcb-for-pure-wayland-build.patch \
     file://0013-clang-Re-enable-opaque-pointers.patch \
     file://0014-Remove-usage-of-std-binary_function.patch \
+    file://0015-Map-the-absl-is_trivially_-functions-to-their-std-im.patch \
+    file://0016-Disable-ABSL_HAVE_STD_IS_TRIVIALLY_ASSIGNABLE-for-cl.patch \
 "
 
 SRC_URI:append:libc-musl = "\

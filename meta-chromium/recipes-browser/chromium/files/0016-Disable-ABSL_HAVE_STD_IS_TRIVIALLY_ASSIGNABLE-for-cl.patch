@@ -1,0 +1,32 @@
+From 0c92330442d6b1be934e0407115c8084250ef347 Mon Sep 17 00:00:00 2001
+From: Abseil Team <absl-team@google.com>
+Date: Fri, 5 Aug 2022 10:09:33 -0700
+Subject: [PATCH 2/2] Disable ABSL_HAVE_STD_IS_TRIVIALLY_ASSIGNABLE for
+ clang-cl.
+
+The Lexan and MSVC toolchains both set _MSC_VER. The MSVC toolchain must set `ABSL_HAVE_STD_IS_TRIVIALLY_ASSIGNABLE` and `ABSL_HAVE_STD_IS_TRIVIALLY_CONSTRUCTIBLE`, in order to use Abseil workarounds in the absence of these types. This is not necessary for clang-cl.
+
+This change excludes clang-cl from the predicate setting these variables.
+
+PiperOrigin-RevId: 465589196
+Change-Id: I0426ec4f844aabe7cdde5c60725f6a9a6b16479f
+---
+ absl/base/config.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/abseil-cpp/absl/base/config.h b/third_party/abseil-cpp/absl/base/config.h
+index 2faed85a..9626548c 100644
+--- a/third_party/abseil-cpp/absl/base/config.h
++++ b/third_party/abseil-cpp/absl/base/config.h
+@@ -268,7 +268,7 @@ static_assert(ABSL_INTERNAL_INLINE_NAMESPACE_STR[0] != 'h' ||
+      ((ABSL_INTERNAL_HAVE_MIN_GNUC_VERSION(7, 4) && defined(__GLIBCXX__)) || \
+       (ABSL_INTERNAL_HAVE_MIN_GNUC_VERSION(8, 2) &&                          \
+        defined(_LIBCPP_VERSION)))) ||                                        \
+-    (defined(_MSC_VER) && !defined(__NVCC__))
++    (defined(_MSC_VER) && !defined(__NVCC__) && !defined(__clang__))
+ #define ABSL_HAVE_STD_IS_TRIVIALLY_CONSTRUCTIBLE 1
+ #define ABSL_HAVE_STD_IS_TRIVIALLY_ASSIGNABLE 1
+ #endif
+-- 
+2.31.1
+
