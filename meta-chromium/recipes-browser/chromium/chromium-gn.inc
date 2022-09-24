@@ -25,6 +25,7 @@ SRC_URI += " \
     file://0014-Remove-usage-of-std-binary_function.patch \
     file://0015-Map-the-absl-is_trivially_-functions-to-their-std-im.patch \
     file://0016-Disable-ABSL_HAVE_STD_IS_TRIVIALLY_ASSIGNABLE-for-cl.patch \
+    file://0017-wayland-1.20.patch \
 "
 
 SRC_URI:append:libc-musl = "\

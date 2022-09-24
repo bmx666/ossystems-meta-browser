@@ -1,0 +1,5451 @@
+diff --git a/third_party/wayland/src/.gitignore b/third_party/wayland/src/.gitignore
+index eadea12..4fefe5d 100644
+--- a/third_party/wayland/src/.gitignore
++++ b/third_party/wayland/src/.gitignore
+@@ -1,48 +1,8 @@
+ *.announce
+-*.deps
+-*.jpg
+-*.la
+-*.lo
+-*.o
+-*.pc
+ *.sig
+-*.so
+ *.swp
+-*.3
+-*.7
+ *.log
+-*.trs
+ *.tar.xz
+ *~
+-*-test
+-.libs
+-.dirstamp
+ cscope.out
+ ctags
+-/aclocal.m4
+-/wayland-scanner.m4
+-/autom4te.cache
+-/compile
+-/config.guess
+-/config.h
+-/config.h.in
+-/config.log
+-/config.mk
+-/config.status
+-/config.sub
+-/configure
+-/depcomp
+-/install-sh
+-/libtool
+-/ltmain.sh
+-/missing
+-/stamp-h1
+-/test-driver
+-/tests/output/
+-Makefile
+-Makefile.in
+-exec-fd-leak-checker
+-fixed-benchmark
+-/wayland-egl-abi-check
+-/wayland-scanner
+-protocol/*.[ch]
+diff --git a/third_party/wayland/src/.gitlab-ci.yml b/third_party/wayland/src/.gitlab-ci.yml
+index b2e174f..8f70e1f 100644
+--- a/third_party/wayland/src/.gitlab-ci.yml
++++ b/third_party/wayland/src/.gitlab-ci.yml
+@@ -1,90 +1,350 @@
+-.templates_sha: &template_sha bd8010dd0123d3f0dda4ef691078566af2842613 # see https://docs.gitlab.com/ee/ci/yaml/#includefile
++# This file uses the freedesktop ci-templates to build Wayland and run our
++# tests in CI.
++#
++# ci-templates uses a multi-stage build process. First, the base container
++# image is built which contains the core distribution, the toolchain, and
++# all our build dependencies. This container is aggressively cached; if a
++# container image matching $FDO_DISTRIBUTION_TAG is found in either the
++# upstream repo (wayland/weston) or the user's downstream repo, it is
++# reused for the build. This gives us predictability of build and far
++# quicker runtimes, however it means that any changes to the base container
++# must also change $FDO_DISTRIBUTION_TAG. When changing this, please use
++# the current date as well as a unique build identifier.
++#
++# After the container is either rebuilt (tag mismatch) or reused (tag
++# previously used), the build stage executes within this container.
++#
++# The final stage is used to expose documentation and coverage information,
++# including publishing documentation to the public site when built on the
++# main branch.
++#
++# Apart from the 'variables', 'include', and 'stages' top-level anchors,
++# everything not beginning with a dot ('.') is the name of a job which will
++# be executed as part of CI, unless the rules specify that it should not be
++# run.
++#
++# Variables prefixed with CI_ are generally provided by GitLab itself;
++# variables prefixed with FDO_ and templates prefixed by .fdo are provided
++# by the ci-templates.
++#
++# For more information on GitLab CI, including the YAML syntax, see:
++#   https://docs.gitlab.com/ee/ci/yaml/README.html
++#
++# Note that freedesktop.org uses the 'Community Edition' of GitLab, so features
++# marked as 'premium' or 'ultimate' are not available to us.
++#
++# For more information on ci-templates, see:
++#   - documentation at https://freedesktop.pages.freedesktop.org/ci-templates/
++#   - repo at https://gitlab.freedesktop.org/freedesktop/ci-templates/
+ 
++# Here we use a fixed ref in order to isolate ourselves from ci-templates
++# API changes. If you need new features from ci-templates you must bump
++# this to the current SHA you require from the ci-templates repo, however
++# be aware that you may need to account for API changes when doing so.
++.templates_sha: &template_sha 567700e483aabed992d0a4fea84994a0472deff6 # see https://docs.gitlab.com/ee/ci/yaml/#includefile
+ 
+ include:
+-  # Debian container builder template
+   - project: 'freedesktop/ci-templates'
+     ref: *template_sha
+-    file: '/templates/debian.yml'
++    file:
++      - '/templates/debian.yml'
++      - '/templates/freebsd.yml'
++      - '/templates/ci-fairy.yml'
++
++variables:
++  FDO_UPSTREAM_REPO: wayland/wayland
++  FDO_REPO_SUFFIX: "$BUILD_OS/$BUILD_ARCH"
+ 
+ 
++# Define the build stages. These are used for UI grouping as well as
++# dependencies.
+ stages:
+-  - prep
+-  - build
++  - "Merge request checks"
++  - "Base container"
++  - "Build and test"
++  - "Other build configurations"
+ 
++.ci-rules:
++  rules:
++    - when: on_success
+ 
+-variables:
+-  DEBIAN_PACKAGES: 'build-essential automake autoconf libtool pkg-config libexpat1-dev libffi-dev libxml2-dev doxygen graphviz xmlto xsltproc docbook-xsl python3-pip python3-setuptools ninja-build'
+-  DEBIAN_EXEC: 'pip3 install meson==0.52.1'
+-  # these tags should be updated each time the list of packages is updated
+-  # changing these will force rebuilding the associated image
+-  # Note: these tags have no meaning and are not tied to a particular
+-  # wayland version
+-  DEBIAN_TAG: '2020-06-05.1'
+-  FDO_UPSTREAM_REPO: wayland/wayland
++# Base variables used for anything using a Debian environment
++.os-debian:
++  variables:
++    BUILD_OS: debian
++    FDO_DISTRIBUTION_VERSION: buster
++    FDO_DISTRIBUTION_PACKAGES: 'build-essential pkg-config libexpat1-dev libffi-dev libxml2-dev doxygen graphviz xmlto xsltproc docbook-xsl python3-pip python3-setuptools ninja-build'
++    FDO_DISTRIBUTION_EXEC: 'pip3 install meson==0.52.1'
++    # bump this tag every time you change something which requires rebuilding the
++    # base image
++    FDO_DISTRIBUTION_TAG: "2021-08-03.0"
++
++.debian-x86_64:
++  extends:
++    - .os-debian
++  variables:
++    BUILD_ARCH: "x86-64"
++
++.debian-aarch64:
++  extends:
++    - .os-debian
++  variables:
++    BUILD_ARCH: "aarch64"
++
++.debian-armv7:
++  extends:
++    - .os-debian
++  variables:
++    BUILD_ARCH: "armv7"
++
++
++# Does not inherit .ci-rules as we only want it to run in MR context.
++check-commit:
++  extends:
++    - .fdo.ci-fairy
++  stage: "Merge request checks"
++  rules:
++    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
++      when: always
++    - when: never
++  script:
++    - ci-fairy check-commits --signed-off-by --junit-xml=results.xml
++  variables:
++    GIT_DEPTH: 100
++  artifacts:
++    reports:
++      junit: results.xml
+ 
+ 
+-.debian.buster:
++# Build our base container image, which contains the core distribution, the
++# toolchain, and all our build dependencies. This will be reused in the build
++# stage.
++x86_64-debian-container_prep:
++  extends:
++    - .ci-rules
++    - .debian-x86_64
++    - .fdo.container-build@debian
++  stage: "Base container"
+   variables:
+-    FDO_DISTRIBUTION_PACKAGES: $DEBIAN_PACKAGES
+-    FDO_DISTRIBUTION_TAG: $DEBIAN_TAG
+-    FDO_DISTRIBUTION_VERSION: 'buster'
+-    FDO_DISTRIBUTION_EXEC: $DEBIAN_EXEC
++    GIT_STRATEGY: none
+ 
++aarch64-debian-container_prep:
++  extends:
++    - .ci-rules
++    - .debian-aarch64
++    - .fdo.container-build@debian
++  tags:
++    - aarch64
++  stage: "Base container"
++  variables:
++    GIT_STRATEGY: none
+ 
+-debian:buster@container-prep:
++armv7-debian-container_prep:
+   extends:
+-    - .debian.buster
++    - .ci-rules
++    - .debian-armv7
+     - .fdo.container-build@debian
+-  stage: prep
++  tags:
++    - aarch64
++  stage: "Base container"
+   variables:
+     GIT_STRATEGY: none
++    FDO_BASE_IMAGE: "arm32v7/debian:$FDO_DISTRIBUTION_VERSION"
++
++
++# Core build environment.
++.build-env:
++  variables:
++    MESON_BUILD_TYPE: "-Dbuildtype=debug -Doptimization=0 -Db_sanitize=address,undefined"
++  before_script:
++    - export BUILD_ID="wayland-$CI_JOB_NAME"
++    - export PREFIX="${CI_PROJECT_DIR}/prefix-${BUILD_ID}"
++    - export BUILDDIR="${CI_PROJECT_DIR}/build-${BUILD_ID}"
++    - mkdir "$BUILDDIR" "$PREFIX"
++
+ 
++# Build variants to be stacked on as required.
++.build-release:
++  stage: "Other build configurations"
++  variables:
++    MESON_BUILD_TYPE: "-Dbuildtype=release"
++
++
++# OS/architecture-specific variants
++.build-env-debian-x86_64:
++  extends:
++    - .fdo.suffixed-image@debian
++    - .debian-x86_64
++    - .build-env
++  needs:
++    - job: x86_64-debian-container_prep
++      artifacts: false
+ 
+-build-native-autotools:
++.build-env-debian-aarch64:
+   extends:
+-    - .debian.buster
+-    - .fdo.distribution-image@debian
+-  stage: build
++    - .fdo.suffixed-image@debian
++    - .debian-aarch64
++    - .build-env
++  variables:
++    # At least with the versions we have, the LSan runtime makes fork unusably
++    # slow on AArch64, which is bad news since the test suite decides to fork
++    # for every single subtest. For now, in order to get AArch64 builds and
++    # tests into CI, just assume that we're not going to leak any more on
++    # AArch64 than we would on ARMv7 or x86-64.
++    ASAN_OPTIONS: "detect_leaks=0"
++  tags:
++    - aarch64
++  needs:
++    - job: aarch64-debian-container_prep
++      artifacts: false
++
++.build-env-debian-armv7:
++  extends:
++    - .fdo.suffixed-image@debian
++    - .debian-armv7
++    - .build-env
++  tags:
++    - aarch64
++  needs:
++    - job: armv7-debian-container_prep
++      artifacts: false
++
++
++# Full build and test.
++.do-build:
++  extends:
++    - .ci-rules
++  stage: "Build and test"
+   script:
+-  - export BUILD_ID="wayland-$CI_JOB_NAME_$CI_COMMIT_SHA-$CI_JOB_ID"
+-  - export PREFIX="$(pwd)/prefix-$BUILD_ID"
+-  - export BUILDDIR="$(pwd)/build-$BUILD_ID"
+-  - export MAKEFLAGS="-j4"
+-  - mkdir "$BUILDDIR" "$PREFIX"
+-  - cd "$BUILDDIR"
+-  - ../autogen.sh --prefix="$PREFIX" --with-icondir=/usr/share/X11/icons
+-  - make all
+-  - make check
+-  - make install
+-  - make distcheck
++    - cd "$BUILDDIR"
++    - meson --prefix="$PREFIX" -Dicon_directory=/usr/share/X11/icons -Dwerror=true ${MESON_BUILD_TYPE} ..
++    - ninja -k0 -j${FDO_CI_CONCURRENT:-4}
++    - meson test --num-processes ${FDO_CI_CONCURRENT:-4}
++    - ninja clean
+   artifacts:
+-    name: wayland-$CI_COMMIT_SHA-$CI_JOB_ID
++    name: wayland-$CI_JOB_NAME
+     when: always
+     paths:
+-    - build-*/wayland-*.tar.xz
+-    - build-*/wayland*/_build/sub/*.log
+-    - build-*/*.log
+-    - prefix-*
+-
++      - build-*/meson-logs
++      - prefix-*
++    reports:
++      junit: build-*/meson-logs/testlog.junit.xml
+ 
+-build-native-meson:
++# Full build and test.
++.do-build-qemu:
+   extends:
+-    - .debian.buster
+-    - .fdo.distribution-image@debian
+-  stage: build
++    - .ci-rules
++  stage: "Build and test"
+   script:
+-  - export BUILD_ID="wayland-$CI_JOB_NAME_$CI_COMMIT_SHA-$CI_JOB_ID"
+-  - export PREFIX="$(pwd)/prefix-$BUILD_ID"
+-  - export BUILDDIR="$(pwd)/build-$BUILD_ID"
+-  - mkdir "$BUILDDIR" "$PREFIX"
+-  - cd "$BUILDDIR"
+-  - meson --prefix="$PREFIX" -Dicon_directory=/usr/share/X11/icons ..
+-  - ninja -k0 test
+-  - ninja clean
++    # Start the VM and copy our workspace to the VM
++    - /app/vmctl start
++    - scp -r $PWD "vm:"
++    # The `set +e is needed to ensure that we always copy the meson logs back to
++    # the workspace to see details about the failed tests.
++    - |
++      set +e
++      /app/vmctl exec "pkg info; cd $CI_PROJECT_NAME ; meson $BUILDDIR --prefix=$PREFIX $MESON_BUILD_TYPE $MESON_ARGS && ninja -C $BUILDDIR -j${FDO_CI_CONCURRENT:-4}"
++      /app/vmctl exec "meson test --print-errorlogs -C $BUILDDIR --num-processes ${FDO_CI_CONCURRENT:-4}" && touch .tests-successful
++      set -ex
++      scp -r vm:$BUILDDIR/meson-logs .
++      /app/vmctl exec "ninja -C $BUILDDIR install"
++      mkdir -p $PREFIX && scp -r vm:$PREFIX/ $PREFIX/
++    # Finally, shut down the VM.
++    - /app/vmctl stop
++    - test -f .tests-successful || exit 1
+   artifacts:
+-    name: wayland-meson-$CI_COMMIT_SHA-$CI_JOB_ID
++    name: wayland-$CI_JOB_NAME
+     when: always
+     paths:
+-    - build-meson/meson-logs
+-    - prefix-*
++      - meson-logs
++      - prefix-*
++    reports:
++      junit: meson-logs/testlog.junit.xml
++
++# Full build and test.
++x86_64-debian-build:
++  extends:
++    - .build-env-debian-x86_64
++    - .do-build
++
++x86_64-release-debian-build:
++  extends:
++    - .build-env-debian-x86_64
++    - .do-build
++    - .build-release
++
++aarch64-debian-build:
++  extends:
++    - .build-env-debian-aarch64
++    - .do-build
++
++aarch64-release-debian-build:
++  extends:
++    - .build-env-debian-aarch64
++    - .do-build
++    - .build-release
++
++armv7-debian-build:
++  extends:
++    - .build-env-debian-armv7
++    - .do-build
++
++armv7-release-debian-build:
++  extends:
++    - .build-env-debian-armv7
++    - .do-build
++    - .build-release
++
++# Base variables used for anything using a FreeBSD environment
++.os-freebsd:
++  variables:
++    BUILD_OS: freebsd
++    FDO_DISTRIBUTION_VERSION: "13.0"
++    FDO_DISTRIBUTION_PACKAGES: 'libxslt meson ninja pkgconf expat libffi libepoll-shim libxml2'
++    # bump this tag every time you change something which requires rebuilding the
++    # base image
++    FDO_DISTRIBUTION_TAG: "2021-08-05.0"
++    # Don't build documentation since installing the required tools massively
++    # increases the VM image (and therefore container) size.
++    MESON_ARGS: "-Ddocumentation=false"
++
++.freebsd-x86_64:
++  extends:
++    - .os-freebsd
++  variables:
++    BUILD_ARCH: "x86_64"
++
++x86_64-freebsd-container_prep:
++  extends:
++    - .ci-rules
++    - .freebsd-x86_64
++    - .fdo.qemu-build@freebsd@x86_64
++  stage: "Base container"
++  variables:
++    GIT_STRATEGY: none
++
++.build-env-freebsd-x86_64:
++  variables:
++    # Compiling with ASan+UBSan appears to trigger an infinite loop in the
++    # compiler shipped with FreeBSD 13.0, so we only use UBSan here.
++    # Additionally, sanitizers can't be used with b_lundef on FreeBSD.
++    MESON_BUILD_TYPE: "-Dbuildtype=debug -Db_sanitize=undefined -Db_lundef=false"
++  extends:
++    - .fdo.suffixed-image@freebsd
++    - .freebsd-x86_64
++    - .build-env
++  needs:
++    - job: x86_64-freebsd-container_prep
++      artifacts: false
++
++# Full build and test.
++x86_64-freebsd-build:
++  extends:
++    - .build-env-freebsd-x86_64
++    - .do-build-qemu
++
++x86_64-release-freebsd-build:
++  extends:
++    - .build-env-freebsd-x86_64
++    - .do-build-qemu
++    - .build-release
+diff --git a/third_party/wayland/src/Makefile.am b/third_party/wayland/src/Makefile.am
+deleted file mode 100644
+index b9438b7..0000000
+--- a/third_party/wayland/src/Makefile.am
++++ /dev/null
+@@ -1,341 +0,0 @@
+-if BUILD_DOCS
+-SUBDIRS = doc
+-endif
+-
+-ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
+-
+-AM_CPPFLAGS =					\
+-	-I$(top_builddir)/src			\
+-	-I$(top_srcdir)/src			\
+-	-I$(top_builddir)/protocol
+-
+-AM_CFLAGS = $(GCC_CFLAGS)
+-
+-aclocaldir = $(datadir)/aclocal
+-dist_aclocal_DATA = wayland-scanner.m4
+-
+-dist_pkgdata_DATA =				\
+-	wayland-scanner.mk			\
+-	protocol/wayland.xml			\
+-	protocol/wayland.dtd
+-
+-pkgconfigdir = $(libdir)/pkgconfig
+-pkgconfig_DATA =
+-
+-bin_PROGRAMS = wayland-scanner
+-wayland_scanner_SOURCES = src/scanner.c
+-wayland_scanner_CPPFLAGS = $(AM_CPPFLAGS) -include config.h
+-wayland_scanner_CFLAGS = $(EXPAT_CFLAGS) $(LIBXML_CFLAGS) $(AM_CFLAGS)
+-wayland_scanner_LDADD = $(EXPAT_LIBS) $(LIBXML_LIBS) libwayland-util.la
+-pkgconfig_DATA += src/wayland-scanner.pc
+-
+-if DTD_VALIDATION
+-wayland_scanner_SOURCES += src/dtddata.S
+-endif
+-src/dtddata.o: protocol/wayland.dtd
+-
+-if USE_HOST_SCANNER
+-wayland_scanner = wayland-scanner
+-else
+-$(BUILT_SOURCES) : wayland-scanner
+-wayland_scanner = $(top_builddir)/wayland-scanner
+-endif
+-
+-libwayland_util_la_CFLAGS = $(AM_CFLAGS)
+-libwayland_util_la_SOURCES =			\
+-	src/wayland-util.c			\
+-	src/wayland-util.h
+-
+-noinst_LTLIBRARIES = libwayland-util.la
+-
+-if ENABLE_LIBRARIES
+-noinst_LTLIBRARIES += libwayland-private.la
+-lib_LTLIBRARIES = libwayland-server.la libwayland-client.la
+-
+-libwayland_private_la_CFLAGS = $(FFI_CFLAGS) $(AM_CFLAGS)
+-libwayland_private_la_SOURCES =			\
+-	src/connection.c			\
+-	src/wayland-os.c			\
+-	src/wayland-os.h			\
+-	src/wayland-private.h			\
+-	src/wayland-server-private.h
+-
+-include_HEADERS =				\
+-	src/wayland-util.h			\
+-	src/wayland-server.h			\
+-	src/wayland-server-core.h		\
+-	src/wayland-client.h			\
+-	src/wayland-client-core.h		\
+-	src/wayland-version.h
+-
+-nodist_include_HEADERS =			\
+-	protocol/wayland-server-protocol.h	\
+-	protocol/wayland-client-protocol.h
+-
+-libwayland_server_la_CFLAGS = $(FFI_CFLAGS) $(AM_CFLAGS) -pthread
+-libwayland_server_la_LIBADD = $(FFI_LIBS) libwayland-private.la libwayland-util.la $(RT_LIBS) -lm
+-libwayland_server_la_LDFLAGS = -version-info 1:0:1
+-libwayland_server_la_SOURCES =			\
+-	src/wayland-server.c			\
+-	src/wayland-shm.c			\
+-	src/event-loop.c
+-
+-nodist_libwayland_server_la_SOURCES =		\
+-	protocol/wayland-server-protocol.h	\
+-	protocol/wayland-protocol.c
+-
+-libwayland_client_la_CFLAGS = $(FFI_CFLAGS) $(AM_CFLAGS) -pthread
+-libwayland_client_la_LIBADD = $(FFI_LIBS) libwayland-private.la libwayland-util.la $(RT_LIBS) -lm
+-libwayland_client_la_LDFLAGS = -version-info 3:0:3
+-libwayland_client_la_SOURCES =			\
+-	src/wayland-client.c
+-
+-nodist_libwayland_client_la_SOURCES =		\
+-	protocol/wayland-client-protocol.h	\
+-	protocol/wayland-protocol.c
+-
+-pkgconfig_DATA += src/wayland-client.pc src/wayland-server.pc
+-
+-protocol/%-protocol.c : $(top_srcdir)/protocol/%.xml
+-if USE_HOST_SCANNER
+-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) -s code $< $@
+-else
+-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) -s public-code $< $@
+-endif
+-
+-protocol/%-server-protocol.h : $(top_srcdir)/protocol/%.xml
+-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) -s server-header $< $@
+-
+-protocol/%-client-protocol.h : $(top_srcdir)/protocol/%.xml
+-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) -s client-header $< $@
+-
+-protocol/%-server-protocol-core.h : $(top_srcdir)/protocol/%.xml
+-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) -s server-header -c < $< > $@
+-
+-protocol/%-client-protocol-core.h : $(top_srcdir)/protocol/%.xml
+-	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) -s client-header -c < $< > $@
+-
+-BUILT_SOURCES =					\
+-	$(nodist_libwayland_server_la_SOURCES)	\
+-	$(nodist_libwayland_client_la_SOURCES)	\
+-	$(nodist_headers_test_SOURCES)		\
+-	$(nodist_display_test_SOURCES)
+-
+-CLEANFILES = $(BUILT_SOURCES) doc/doxygen/doxygen_sqlite3.db
+-DISTCLEANFILES = src/wayland-version.h
+-EXTRA_DIST = CONTRIBUTING.md
+-
+-
+-
+-lib_LTLIBRARIES += libwayland-cursor.la
+-
+-include_HEADERS += cursor/wayland-cursor.h
+-
+-libwayland_cursor_la_SOURCES =			\
+-	cursor/wayland-cursor.c			\
+-	cursor/os-compatibility.c		\
+-	cursor/os-compatibility.h		\
+-	cursor/cursor-data.h			\
+-	cursor/xcursor.c			\
+-	cursor/xcursor.h
+-libwayland_cursor_la_LIBADD = libwayland-client.la
+-
+-pkgconfig_DATA += cursor/wayland-cursor.pc
+-
+-libwayland_cursor_la_CFLAGS =			\
+-	$(AM_CFLAGS)				\
+-	-I$(top_builddir)/src			\
+-	-I$(top_srcdir)/src			\
+-	-DICONDIR=\"$(ICONDIR)\"
+-
+-lib_LTLIBRARIES += libwayland-egl.la
+-
+-include_HEADERS += egl/wayland-egl.h
+-include_HEADERS += egl/wayland-egl-core.h
+-
+-libwayland_egl_la_SOURCES = egl/wayland-egl.c
+-libwayland_egl_la_LDFLAGS = -version-info 1
+-
+-pkgconfig_DATA += egl/wayland-egl.pc
+-
+-## XXX: backend interface
+-include_HEADERS += egl/wayland-egl-backend.h
+-pkgconfig_DATA += egl/wayland-egl-backend.pc
+-
+-built_test_programs =				\
+-	array-test				\
+-	client-test				\
+-	display-test				\
+-	connection-test				\
+-	event-loop-test				\
+-	fixed-test				\
+-	interface-test				\
+-	list-test				\
+-	map-test				\
+-	os-wrappers-test			\
+-	sanity-test				\
+-	socket-test				\
+-	queue-test				\
+-	proxy-test				\
+-	signal-test				\
+-	newsignal-test				\
+-	resources-test				\
+-	message-test				\
+-	headers-test				\
+-	compositor-introspection-test		\
+-	protocol-logger-test			\
+-	wayland-egl-abi-check
+-
+-EXTRA_DIST += egl/wayland-egl-symbols-check
+-
+-check_PROGRAMS = wayland-egl-abi-check
+-wayland_egl_abi_check_SOURCES = egl/wayland-egl-abi-check.c
+-
+-if ENABLE_CPP_TEST
+-built_test_programs += cpp-compile-test
+-endif
+-
+-AM_TESTS_ENVIRONMENT =							\
+-	export WAYLAND_SCANNER='$(top_builddir)/wayland-scanner'	\
+-	TEST_DATA_DIR='$(top_srcdir)/tests/data'			\
+-	TEST_OUTPUT_DIR='$(top_builddir)/tests/output'			\
+-	WAYLAND_EGL_LIB='$(top_builddir)/.libs/libwayland-egl.so'	\
+-	SED=$(SED)							\
+-	NM='$(NM)'							\
+-	;
+-
+-TESTS = $(built_test_programs)			\
+-	egl/wayland-egl-symbols-check		\
+-	tests/scanner-test.sh
+-
+-noinst_PROGRAMS =				\
+-	$(built_test_programs)			\
+-	exec-fd-leak-checker			\
+-	fixed-benchmark
+-
+-noinst_LTLIBRARIES +=				\
+-	libtest-runner.la			\
+-	libtest-helpers.la
+-
+-libtest_helpers_la_SOURCES = tests/test-helpers.c
+-
+-libtest_runner_la_SOURCES =			\
+-	tests/test-runner.c			\
+-	tests/test-runner.h			\
+-	tests/test-compositor.h			\
+-	tests/test-compositor.c
+-libtest_runner_la_LIBADD =			\
+-	libwayland-private.la			\
+-	libwayland-util.la			\
+-	libwayland-client.la			\
+-	libwayland-server.la			\
+-	libtest-helpers.la			\
+-	$(RT_LIBS) $(DL_LIBS) $(FFI_LIBS)
+-
+-array_test_SOURCES = tests/array-test.c
+-array_test_LDADD = libtest-runner.la
+-client_test_SOURCES = tests/client-test.c
+-client_test_LDADD = libtest-runner.la
+-display_test_CFLAGS = -pthread
+-display_test_SOURCES = tests/display-test.c
+-display_test_LDADD = libtest-runner.la
+-nodist_display_test_SOURCES =				\
+-	protocol/tests-server-protocol.h		\
+-	protocol/tests-client-protocol.h 		\
+-	protocol/tests-protocol.c
+-connection_test_SOURCES = tests/connection-test.c
+-connection_test_LDADD = libtest-runner.la
+-event_loop_test_SOURCES = tests/event-loop-test.c
+-event_loop_test_LDADD = libtest-runner.la
+-fixed_test_SOURCES = tests/fixed-test.c
+-fixed_test_LDADD = libtest-runner.la
+-interface_test_SOURCES = tests/interface-test.c
+-interface_test_LDADD = libtest-runner.la
+-list_test_SOURCES = tests/list-test.c
+-list_test_LDADD = libtest-runner.la
+-map_test_SOURCES = tests/map-test.c
+-map_test_LDADD = libtest-runner.la
+-sanity_test_SOURCES = tests/sanity-test.c
+-sanity_test_LDADD = libtest-runner.la
+-socket_test_SOURCES = tests/socket-test.c
+-socket_test_LDADD = libtest-runner.la
+-queue_test_SOURCES = tests/queue-test.c
+-queue_test_LDADD = libtest-runner.la
+-proxy_test_SOURCES = tests/proxy-test.c
+-proxy_test_LDADD = libtest-runner.la
+-signal_test_SOURCES = tests/signal-test.c
+-signal_test_LDADD = libtest-runner.la
+-# wayland-server.c is needed here to access wl_priv_* functions
+-newsignal_test_SOURCES = tests/newsignal-test.c src/wayland-server.c
+-newsignal_test_LDADD = libtest-runner.la
+-resources_test_SOURCES = tests/resources-test.c
+-resources_test_LDADD = libtest-runner.la
+-message_test_SOURCES = tests/message-test.c
+-message_test_LDADD = libtest-runner.la
+-compositor_introspection_test_SOURCES = tests/compositor-introspection-test.c
+-compositor_introspection_test_LDADD = libtest-runner.la
+-protocol_logger_test_SOURCES = tests/protocol-logger-test.c
+-protocol_logger_test_LDADD = libtest-runner.la
+-headers_test_SOURCES = tests/headers-test.c \
+-		       tests/headers-protocol-test.c \
+-		       tests/headers-protocol-core-test.c
+-nodist_headers_test_SOURCES =			\
+-	protocol/wayland-server-protocol-core.h	\
+-	protocol/wayland-client-protocol-core.h
+-
+-if ENABLE_CPP_TEST
+-cpp_compile_test_SOURCES = tests/cpp-compile-test.cpp
+-endif
+-
+-fixed_benchmark_SOURCES = tests/fixed-benchmark.c
+-fixed_benchmark_LDADD = $(RT_LIBS)
+-
+-os_wrappers_test_SOURCES = tests/os-wrappers-test.c
+-os_wrappers_test_LDADD = libtest-runner.la
+-
+-exec_fd_leak_checker_SOURCES = tests/exec-fd-leak-checker.c
+-exec_fd_leak_checker_LDADD = libtest-helpers.la
+-
+-EXTRA_DIST += tests/scanner-test.sh			\
+-	protocol/tests.xml				\
+-	tests/data/bad-identifier-arg.xml		\
+-	tests/data/bad-identifier-entry.xml		\
+-	tests/data/bad-identifier-enum.xml		\
+-	tests/data/bad-identifier-event.xml		\
+-	tests/data/bad-identifier-interface.xml		\
+-	tests/data/bad-identifier-protocol.xml		\
+-	tests/data/bad-identifier-request.xml		\
+-	tests/data/example.xml				\
+-	tests/data/example-client.h			\
+-	tests/data/example-server.h			\
+-	tests/data/example-code.c			\
+-	tests/data/small.xml				\
+-	tests/data/small-code.c				\
+-	tests/data/small-client.h			\
+-	tests/data/small-server.h			\
+-	tests/data/small-code-core.c			\
+-	tests/data/small-client-core.h			\
+-	tests/data/small-server-core.h			\
+-	tests/data/small-private-code.c			\
+-	meson.build					\
+-	meson_options.txt				\
+-	cursor/meson.build				\
+-	doc/meson.build					\
+-	doc/doxygen/mainpage.dox			\
+-	doc/doxygen/meson.build				\
+-	doc/doxygen/gen-doxygen.py			\
+-	doc/doxygen/xml/meson.build			\
+-	doc/doxygen/xml/Client/meson.build		\
+-	doc/doxygen/xml/Server/meson.build		\
+-	doc/publican/meson.build			\
+-	doc/publican/sources/meson.build		\
+-	egl/meson.build					\
+-	src/meson.build					\
+-	tests/meson.build
+-
+-tests/scanner-test.sh: $(top_builddir)/wayland-scanner
+-
+-clean-local:
+-	-rm -rf tests/output
+-
+-endif #ENABLE_LIBRARIES
+diff --git a/third_party/wayland/src/autogen.sh b/third_party/wayland/src/autogen.sh
+deleted file mode 100755
+index 916169a..0000000
+--- a/third_party/wayland/src/autogen.sh
++++ /dev/null
+@@ -1,9 +0,0 @@
+-#! /bin/sh
+-
+-test -n "$srcdir" || srcdir=`dirname "$0"`
+-test -n "$srcdir" || srcdir=.
+-(
+-  cd "$srcdir" &&
+-  autoreconf --force -v --install
+-) || exit
+-test -n "$NOCONFIGURE" || "$srcdir/configure" "$@"
+diff --git a/third_party/wayland/src/configure.ac b/third_party/wayland/src/configure.ac
+deleted file mode 100644
+index 7f2f393..0000000
+--- a/third_party/wayland/src/configure.ac
++++ /dev/null
+@@ -1,202 +0,0 @@
+-AC_PREREQ([2.64])
+-
+-m4_define([wayland_major_version],  [1])
+-m4_define([wayland_minor_version], [19])
+-m4_define([wayland_micro_version], [0])
+-m4_define([wayland_version],
+-          [wayland_major_version.wayland_minor_version.wayland_micro_version])
+-
+-AC_INIT([wayland],
+-        [wayland_version],
+-	[https://gitlab.freedesktop.org/wayland/wayland/issues/],
+-        [wayland],
+-        [https://wayland.freedesktop.org/])
+-
+-AC_SUBST([WAYLAND_VERSION_MAJOR], [wayland_major_version])
+-AC_SUBST([WAYLAND_VERSION_MINOR], [wayland_minor_version])
+-AC_SUBST([WAYLAND_VERSION_MICRO], [wayland_micro_version])
+-AC_SUBST([WAYLAND_VERSION], [wayland_version])
+-
+-AC_CONFIG_HEADERS([config.h])
+-AC_CONFIG_MACRO_DIR([m4])
+-
+-AM_INIT_AUTOMAKE([1.11 foreign no-dist-gzip dist-xz subdir-objects])
+-
+-AM_SILENT_RULES([yes])
+-
+-# Check for programs
+-AC_PROG_CC
+-AC_PROG_CXX
+-AC_PROG_GREP
+-AM_PROG_AS
+-AC_PROG_NM
+-
+-# check if we have C++ compiler. This is hacky workaround,
+-# for a reason why it is this way see
+-# http://lists.gnu.org/archive/html/bug-autoconf/2010-05/msg00001.html
+-have_cpp_compiler=yes
+-
+-if ! which "$CXX" &>/dev/null; then
+-	have_cpp_compiler=no
+-fi
+-
+-AM_CONDITIONAL(ENABLE_CPP_TEST, test "x$have_cpp_compiler" = "xyes")
+-
+-# Initialize libtool
+-LT_PREREQ([2.2])
+-LT_INIT([disable-static])
+-
+-PKG_PROG_PKG_CONFIG()
+-
+-AC_ARG_ENABLE([fatal-warnings],
+-	      AC_HELP_STRING([--enable-fatal-warnings],
+-			     [Build with -Werror]),
+-	      [enable_fatal_warnings=$enableval],
+-	      [enable_fatal_warnings=no])
+-AS_IF([test x"$enable_fatal_warnings" != "xno"], [
+-      WERROR_CFLAGS="-Werror"
+-])
+-
+-if test "x$GCC" = "xyes"; then
+-	GCC_CFLAGS="$WERROR_CFLAGS -Wall -Wextra -Wno-unused-parameter -g -Wstrict-prototypes -Wmissing-prototypes -fvisibility=hidden"
+-fi
+-AC_SUBST(GCC_CFLAGS)
+-
+-AC_CHECK_HEADERS([sys/prctl.h])
+-AC_CHECK_FUNCS([accept4 mkostemp posix_fallocate prctl memfd_create strndup])
+-
+-# *BSD don't have libdl, but they have its functions in libc
+-WESTON_SEARCH_LIBS([DL], [dl], [dlsym])
+-
+-# OpenBSD doesn't have librt, but it has its functions in libc
+-WESTON_SEARCH_LIBS([RT], [rt], [clock_gettime])
+-
+-AC_ARG_ENABLE([libraries],
+-	      [AC_HELP_STRING([--disable-libraries],
+-			      [Disable compilation of wayland libraries])],
+-	      [],
+-	      [enable_libraries=yes])
+-
+-AC_ARG_WITH([host-scanner],
+-              [AC_HELP_STRING([--with-host-scanner],
+-                              [Use installed wayland-scanner from host PATH during build])],
+-              [],
+-              [with_host_scanner=no])
+-
+-AC_ARG_ENABLE([documentation],
+-	      [AC_HELP_STRING([--disable-documentation],
+-		              [Disable building the documentation])],
+-	      [],
+-	      [enable_documentation=yes])
+-
+-AC_ARG_ENABLE([dtd-validation],
+-	      [AC_HELP_STRING([--disable-dtd-validation],
+-			      [Disable DTD validation of the protocol])],
+-	      [],
+-	      [enable_dtd_validation=yes])
+-
+-AM_CONDITIONAL(USE_HOST_SCANNER, test "x$with_host_scanner" = xyes)
+-
+-AM_CONDITIONAL(ENABLE_LIBRARIES, test "x$enable_libraries" = xyes)
+-
+-AC_ARG_WITH(icondir, [  --with-icondir=<dir>    Look for cursor icons here],
+-		     [  ICONDIR=$withval],
+-		     [  ICONDIR=${datadir}/icons])
+-AC_SUBST([ICONDIR])
+-
+-if test "x$enable_libraries" = "xyes"; then
+-	PKG_CHECK_MODULES(FFI, [libffi])
+-	AC_CHECK_DECL(SFD_CLOEXEC,[],
+-		      [AC_MSG_ERROR("SFD_CLOEXEC is needed to compile wayland libraries")],
+-		      [[#include <sys/signalfd.h>]])
+-	AC_CHECK_DECL(TFD_CLOEXEC,[],
+-		      [AC_MSG_ERROR("TFD_CLOEXEC is needed to compile wayland libraries")],
+-		      [[#include <sys/timerfd.h>]])
+-	AC_CHECK_DECL(CLOCK_MONOTONIC,[],
+-		      [AC_MSG_ERROR("CLOCK_MONOTONIC is needed to compile wayland libraries")],
+-		      [[#include <time.h>]])
+-fi
+-
+-PKG_CHECK_MODULES(EXPAT, [expat])
+-
+-AM_CONDITIONAL([DTD_VALIDATION], [test "x$enable_dtd_validation" = "xyes"])
+-if test "x$enable_dtd_validation" = "xyes"; then
+-	PKG_CHECK_MODULES(LIBXML, [libxml-2.0])
+-	AC_DEFINE(HAVE_LIBXML, 1, [libxml-2.0 is available])
+-	AC_CONFIG_LINKS([src/wayland.dtd.embed:protocol/wayland.dtd])
+-fi
+-
+-AC_PATH_PROG(XSLTPROC, xsltproc)
+-AM_CONDITIONAL([HAVE_XSLTPROC], [test "x$XSLTPROC" != "x"])
+-
+-
+-AM_CONDITIONAL(BUILD_DOCS, [test x$enable_documentation = xyes])
+-if test "x$enable_documentation" = "xyes"; then
+-	AC_PATH_PROG(DOXYGEN, doxygen)
+-
+-	if test "x$DOXYGEN" = "x"; then
+-		AC_MSG_ERROR([Documentation build requested but doxygen not found. Install doxygen or disable the documentation using --disable-documentation])
+-	fi
+-
+-	AC_MSG_CHECKING([for compatible doxygen version])
+-	doxygen_version=`$DOXYGEN --version`
+-	AS_VERSION_COMPARE([$doxygen_version], [1.6.0],
+-	                   [AC_MSG_RESULT([no])
+-	                    AC_MSG_ERROR([Doxygen $doxygen_version too old. Doxygen 1.6+ required for documentation build. Install required doxygen version or disable the documentation using --disable-documentation])],
+-	                   [AC_MSG_RESULT([yes])],
+-	                   [AC_MSG_RESULT([yes])])
+-
+-	AC_PATH_PROG(XMLTO, xmlto)
+-
+-	if test "x$XMLTO" = "x"; then
+-		AC_MSG_ERROR([Documentation build requested but xmlto not found. Install xmlto or disable the documentation using --disable-documentation])
+-	fi
+-
+-	AC_PATH_PROG(DOT, dot)
+-	if test "x$DOT" = "x"; then
+-		AC_MSG_ERROR([Documentation build requested but graphviz's dot not found. Install graphviz or disable the documentation using --disable-documentation])
+-	fi
+-	AC_MSG_CHECKING([for compatible dot version])
+-	dot_version=`$DOT -V 2>&1|$GREP -o ['[0-9]*\.[0-9]*\.[0-9]*']`
+-	AS_VERSION_COMPARE([$dot_version], [2.26.0],
+-	                   [AC_MSG_RESULT([no])
+-	                    AC_MSG_ERROR([Graphviz dot $dot_version too old. Graphviz 2.26+ required for documentation build. Install required graphviz version or disable the documentation using --disable-documentation])],
+-	                   [AC_MSG_RESULT([yes])],
+-	                   [AC_MSG_RESULT([yes])])
+-
+-	AC_MSG_CHECKING([for docbook stylesheets])
+-	DOCS_STYLESHEET=http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl
+-	AC_PATH_PROGS_FEATURE_CHECK([XSLTPROC_TMP], [xsltproc],
+-				    AS_IF([`"$ac_path_XSLTPROC_TMP" --nonet "$DOCS_STYLESHEET" > /dev/null 2>&1`],
+-					  [HAVE_DOCS_STYLESHEET=yes]))
+-	if test "x$HAVE_DOCS_STYLESHEET" != "xyes"; then
+-		AC_MSG_RESULT([no])
+-		AC_MSG_ERROR([Documentation build requested but docbook-xsl stylesheets are not found. Install the docbook-xsl package or disable the documentation using --disable-documentation])
+-	fi
+-
+-	AC_MSG_RESULT([yes])
+-	AC_SUBST(DOCS_STYLESHEET)
+-
+-	AC_CONFIG_FILES([
+-	doc/doxygen/wayland.doxygen
+-	])
+-
+-fi
+-AM_CONDITIONAL([HAVE_XMLTO], [test "x$XMLTO" != "x"])
+-
+-AC_CONFIG_FILES([Makefile
+-		 cursor/wayland-cursor.pc
+-		 cursor/wayland-cursor-uninstalled.pc
+-		 doc/Makefile
+-		 doc/publican/Makefile
+-		 doc/doxygen/Makefile
+-		 egl/wayland-egl.pc
+-		 egl/wayland-egl-backend.pc
+-		 src/wayland-server-uninstalled.pc
+-		 src/wayland-client-uninstalled.pc
+-		 src/wayland-scanner-uninstalled.pc
+-		 src/wayland-server.pc
+-		 src/wayland-client.pc
+-		 src/wayland-scanner.pc
+-		 src/wayland-version.h])
+-AC_OUTPUT
+diff --git a/third_party/wayland/src/cursor/meson.build b/third_party/wayland/src/cursor/meson.build
+index ae85ed9..f7d82e4 100644
+--- a/third_party/wayland/src/cursor/meson.build
++++ b/third_party/wayland/src/cursor/meson.build
+@@ -3,6 +3,15 @@ if icondir == ''
+ 	icondir = join_paths(get_option('prefix'), get_option('datadir'), 'icons')
+ endif
+ 
++if wayland_version[0] != '1'
++	# The versioning used for the shared libraries assumes that the major
++	# version of Wayland as a whole will increase to 2 if and only if there
++	# is an ABI break, at which point we should probably bump the SONAME of
++	# all libraries to .so.2. For more details see
++	# https://gitlab.freedesktop.org/wayland/wayland/-/merge_requests/177
++	error('We probably need to bump the SONAME of libwayland-cursor')
++endif
++
+ wayland_cursor = library(
+ 	'wayland-cursor',
+ 	sources: [
+@@ -10,7 +19,9 @@ wayland_cursor = library(
+ 		'os-compatibility.c',
+ 		'xcursor.c',
+ 	],
+-	version: '0.0.0',
++	# To avoid an unnecessary SONAME bump, wayland 1.x.y produces
++	# libwayland-cursor.so.0.x.y.
++	version: '.'.join(['0', wayland_version[1], wayland_version[2]]),
+ 	dependencies: [ wayland_client_dep ],
+ 	c_args: [ '-DICONDIR="@0@"'.format(icondir) ],
+ 	install: true,
+@@ -25,3 +36,12 @@ pkgconfig.generate(
+ 	libraries: wayland_cursor,
+ 	filebase: 'wayland-cursor',
+ )
++
++wayland_cursor_dep = declare_dependency(
++	link_with: wayland_cursor,
++	include_directories: [ root_inc, include_directories('.') ],
++)
++
++if meson.version().version_compare('>= 0.54.0')
++	meson.override_dependency('wayland-cursor', wayland_cursor_dep)
++endif
+diff --git a/third_party/wayland/src/cursor/wayland-cursor-uninstalled.pc.in b/third_party/wayland/src/cursor/wayland-cursor-uninstalled.pc.in
+deleted file mode 100644
+index f52b113..0000000
+--- a/third_party/wayland/src/cursor/wayland-cursor-uninstalled.pc.in
++++ /dev/null
+@@ -1,8 +0,0 @@
+-libdir=@abs_builddir@/.libs
+-includedir=@abs_srcdir@
+-
+-Name: Wayland Cursor
+-Description: Wayland cursor helper library (not installed)
+-Version: @WAYLAND_VERSION@
+-Cflags: -I${includedir}
+-Libs: -L${libdir} -lwayland-cursor
+diff --git a/third_party/wayland/src/cursor/wayland-cursor.c b/third_party/wayland/src/cursor/wayland-cursor.c
+index 4e2dc50..b3495e0 100644
+--- a/third_party/wayland/src/cursor/wayland-cursor.c
++++ b/third_party/wayland/src/cursor/wayland-cursor.c
+@@ -129,7 +129,6 @@ struct wl_cursor_theme {
+ 	struct wl_cursor **cursors;
+ 	struct wl_shm *shm;
+ 	struct shm_pool *pool;
+-	char *name;
+ 	int size;
+ };
+ 
+@@ -252,13 +251,10 @@ err_free_cursor:
+ }
+ 
+ static void
+-load_default_theme(struct wl_cursor_theme *theme)
++load_fallback_theme(struct wl_cursor_theme *theme)
+ {
+ 	uint32_t i;
+ 
+-	free(theme->name);
+-	theme->name = strdup("default");
+-
+ 	theme->cursor_count = ARRAY_LENGTH(cursor_metadata);
+ 	theme->cursors = malloc(theme->cursor_count * sizeof(*theme->cursors));
+ 
+@@ -391,9 +387,6 @@ wl_cursor_theme_load(const char *name, int size, struct wl_shm *shm)
+ 	if (!name)
+ 		name = "default";
+ 
+-	theme->name = strdup(name);
+-	if (!theme->name)
+-		goto out_error_name;
+ 	theme->size = size;
+ 	theme->cursor_count = 0;
+ 	theme->cursors = NULL;
+@@ -405,13 +398,14 @@ wl_cursor_theme_load(const char *name, int size, struct wl_shm *shm)
+ 	xcursor_load_theme(name, size, load_callback, theme);
+ 
+ 	if (theme->cursor_count == 0)
+-		load_default_theme(theme);
++		xcursor_load_theme(NULL, size, load_callback, theme);
++
++	if (theme->cursor_count == 0)
++		load_fallback_theme(theme);
+ 
+ 	return theme;
+ 
+ out_error_pool:
+-	free(theme->name);
+-out_error_name:
+ 	free(theme);
+ 	return NULL;
+ }
+@@ -430,7 +424,6 @@ wl_cursor_theme_destroy(struct wl_cursor_theme *theme)
+ 
+ 	shm_pool_destroy(theme->pool);
+ 
+-	free(theme->name);
+ 	free(theme->cursors);
+ 	free(theme);
+ }
+@@ -475,7 +468,7 @@ wl_cursor_frame_and_duration(struct wl_cursor *_cursor, uint32_t time,
+ 	uint32_t t;
+ 	int i;
+ 
+-	if (cursor->cursor.image_count == 1) {
++	if (cursor->cursor.image_count == 1 || cursor->total_delay == 0) {
+ 		if (duration)
+ 			*duration = 0;
+ 		return 0;
+diff --git a/third_party/wayland/src/cursor/wayland-cursor.pc.in b/third_party/wayland/src/cursor/wayland-cursor.pc.in
+deleted file mode 100644
+index fbbf5ff..0000000
+--- a/third_party/wayland/src/cursor/wayland-cursor.pc.in
++++ /dev/null
+@@ -1,10 +0,0 @@
+-prefix=@prefix@
+-exec_prefix=@exec_prefix@
+-libdir=@libdir@
+-includedir=@includedir@
+-
+-Name: Wayland Cursor
+-Description: Wayland cursor helper library
+-Version: @WAYLAND_VERSION@
+-Cflags: -I${includedir}
+-Libs: -L${libdir} -lwayland-cursor
+diff --git a/third_party/wayland/src/cursor/xcursor.c b/third_party/wayland/src/cursor/xcursor.c
+index 1f1360f..0506680 100644
+--- a/third_party/wayland/src/cursor/xcursor.c
++++ b/third_party/wayland/src/cursor/xcursor.c
+@@ -300,7 +300,7 @@ _XcursorFileHeaderDestroy (XcursorFileHeader *fileHeader)
+ }
+ 
+ static XcursorFileHeader *
+-_XcursorFileHeaderCreate (int ntoc)
++_XcursorFileHeaderCreate (XcursorUInt ntoc)
+ {
+     XcursorFileHeader	*fileHeader;
+ 
+@@ -621,16 +621,43 @@ XcursorFileLoadImages (FILE *file, int size)
+ #define XCURSORPATH "~/.icons:/usr/share/icons:/usr/share/pixmaps:~/.cursors:/usr/share/cursors/xorg-x11:"ICONDIR
+ #endif
+ 
+-static const char *
++#define XDG_DATA_HOME_FALLBACK "~/.local/share"
++#define CURSORDIR "/icons"
++
++/** Get search path for cursor themes
++ *
++ * This function builds the list of directories to look for cursor
++ * themes in.  The format is PATH-like: directories are separated by
++ * colons.
++ *
++ * The memory block returned by this function is allocated on the heap
++ * and must be freed by the caller.
++ */
++static char *
+ XcursorLibraryPath (void)
+ {
+-    static const char	*path;
++    const char		*env_var;
++    char		*path = NULL;
++    int		pathlen = 0;
+ 
+-    if (!path)
++    env_var = getenv ("XCURSOR_PATH");
++    if (env_var)
+     {
+-	path = getenv ("XCURSOR_PATH");
+-	if (!path)
+-	    path = XCURSORPATH;
++	path = strdup (env_var);
++    }
++    else
++    {
++	env_var = getenv ("XDG_DATA_HOME");
++	if (env_var) {
++            pathlen = strlen (env_var) + strlen (CURSORDIR ":" XCURSORPATH) + 1;
++            path = malloc (pathlen);
++            snprintf (path, pathlen, "%s%s", env_var,
++                      CURSORDIR ":" XCURSORPATH);
++	}
++	else
++	{
++	    path = strdup (XDG_DATA_HOME_FALLBACK CURSORDIR ":" XCURSORPATH);
++	}
+     }
+     return path;
+ }
+@@ -803,6 +830,7 @@ XcursorScanTheme (const char *theme, const char *name)
+     const char  *path;
+     char	*inherits = NULL;
+     const char	*i;
++    char	*xcursor_path;
+ 
+     if (!theme || !name)
+         return NULL;
+@@ -810,7 +838,8 @@ XcursorScanTheme (const char *theme, const char *name)
+     /*
+      * Scan this theme
+      */
+-    for (path = XcursorLibraryPath ();
++    xcursor_path = XcursorLibraryPath ();
++    for (path = xcursor_path;
+ 	 path && f == NULL;
+ 	 path = _XcursorNextPath (path))
+     {
+@@ -842,6 +871,7 @@ XcursorScanTheme (const char *theme, const char *name)
+ 	f = XcursorScanTheme (i, name);
+     if (inherits != NULL)
+ 	free (inherits);
++    free (xcursor_path);
+     return f;
+ }
+ 
+@@ -940,11 +970,13 @@ xcursor_load_theme(const char *theme, int size,
+ 	char *full, *dir;
+ 	char *inherits = NULL;
+ 	const char *path, *i;
++	char *xcursor_path;
+ 
+ 	if (!theme)
+ 		theme = "default";
+ 
+-	for (path = XcursorLibraryPath();
++	xcursor_path = XcursorLibraryPath();
++	for (path = xcursor_path;
+ 	     path;
+ 	     path = _XcursorNextPath(path)) {
+ 		dir = _XcursorBuildThemeDir(path, theme);
+@@ -975,4 +1007,6 @@ xcursor_load_theme(const char *theme, int size,
+ 
+ 	if (inherits)
+ 		free(inherits);
++
++	free (xcursor_path);
+ }
+diff --git a/third_party/wayland/src/doc/Makefile.am b/third_party/wayland/src/doc/Makefile.am
+deleted file mode 100644
+index 0b1c4f2..0000000
+--- a/third_party/wayland/src/doc/Makefile.am
++++ /dev/null
+@@ -1 +0,0 @@
+-SUBDIRS = doxygen publican
+diff --git a/third_party/wayland/src/doc/doxygen/Makefile.am b/third_party/wayland/src/doc/doxygen/Makefile.am
+deleted file mode 100644
+index 86fd8bf..0000000
+--- a/third_party/wayland/src/doc/doxygen/Makefile.am
++++ /dev/null
+@@ -1,113 +0,0 @@
+-
+-.SUFFIXES = .gv .png .map
+-
+-noinst_DATA = \
+-              xml/Client/index.xml \
+-              xml/Cursor/index.xml \
+-              xml/Server/index.xml \
+-              html/Client/index.html \
+-              html/Cursor/index.html \
+-              html/Server/index.html
+-dist_noinst_DATA = wayland.doxygen.in
+-
+-scanned_src_files_shared = 				\
+-	$(top_srcdir)/src/wayland-util.h
+-
+-scanned_src_files_Client = 				\
+-	$(scanned_src_files_shared)			\
+-	$(top_srcdir)/src/wayland-client.c	\
+-	$(top_srcdir)/src/wayland-client.h	\
+-	$(top_srcdir)/src/wayland-client-core.h
+-
+-scanned_src_files_Cursor = 				\
+-	$(top_srcdir)/cursor/wayland-cursor.c	\
+-	$(top_srcdir)/cursor/wayland-cursor.h
+-
+-scanned_src_files_Server = 				\
+-	$(scanned_src_files_shared)			\
+-	$(top_srcdir)/src/event-loop.c		\
+-	$(top_srcdir)/src/wayland-server.c	\
+-	$(top_srcdir)/src/wayland-server.h	\
+-	$(top_srcdir)/src/wayland-server-core.h	\
+-	$(top_srcdir)/src/wayland-shm.c
+-
+-scanned_src_files_man =					\
+-	$(scanned_src_files_Server)			\
+-	$(top_srcdir)/src/wayland-client.c	\
+-	$(top_srcdir)/src/wayland-client.h	\
+-	$(top_srcdir)/src/wayland-client-core.h
+-
+-extra_doxygen = \
+-	mainpage.dox
+-
+-extra_doxygen_Server = \
+-	$(top_builddir)/protocol/wayland-server-protocol.h \
+-	$(extra_doxygen)
+-
+-extra_doxygen_Client = \
+-	$(top_builddir)/protocol/wayland-client-protocol.h \
+-	$(extra_doxygen)
+-
+-extra_doxygen_Cursor = \
+-	$(extra_doxygen)
+-
+-diagramsdir := $(srcdir)/dot
+-diagramssrc := $(wildcard $(diagramsdir)/*.gv)
+-diagrams := $(patsubst $(diagramsdir)/%,xml/%,$(diagramssrc:.gv=.png))
+-diagram_maps := $(patsubst $(diagramsdir)/%,xml/%,$(diagramssrc:.gv=.map))
+-
+-# find all man/man3/wl_foo.3 pages
+-# for this to work, we need to create them before the man target (hence
+-# all-local below)
+-dist_man3_MANS = $(shell test -d man && find man/man3 -name "wl_*.3" -printf "man/man3/%P\n")
+-
+-# Listing various directories that might need to be created.
+-alldirsrel := xml xml/Client xml/Server xml/Cursor man/man3 html/Client html/Server html/Cursor
+-alldirs := $(patsubst %,$(CURDIR)/%,$(alldirsrel))
+-
+-$(diagrams): $(diagramssrc)
+-
+-$(diagram_maps):  $(diagramssrc)
+-
+-xml/%/index.xml: $(top_srcdir)/src/scanner.c $(scanned_src_files_%) wayland.doxygen $(diagrams) $(diagram_maps) | $(CURDIR)/xml/%
+-	$(AM_V_GEN)(cat wayland.doxygen; \
+-          echo "GENERATE_XML=YES"; \
+-          echo "XML_OUTPUT=xml/$*"; \
+-          echo "INPUT= $(scanned_src_files_$*)"; \
+-          ) | $(DOXYGEN) -
+-
+-html/%/index.html: $(scanned_src_files_%) wayland.doxygen $(diagrams) $(diagram_maps) | $(CURDIR)/html/%
+-	$(AM_V_GEN)(cat wayland.doxygen; \
+-          echo "PROJECT_NAME=\"Wayland $* API\""; \
+-          echo "GENERATE_HTML=YES"; \
+-          echo "HTML_OUTPUT=html/$*"; \
+-          echo "INPUT= $(scanned_src_files_$*) $(extra_doxygen_$*)"; \
+-          ) | $(DOXYGEN) -
+-
+-man/man3/wl_display.3: $(top_srcdir)/src/scanner.c $(scanned_src_files_man) wayland.doxygen | $(CURDIR)/man/man3
+-	$(AM_V_GEN)(cat wayland.doxygen; \
+-          echo "GENERATE_MAN=YES"; \
+-          echo "MAN_OUTPUT=man"; \
+-          echo "JAVADOC_AUTOBRIEF=NO"; \
+-          echo "INPUT= $(scanned_src_files_man)"; \
+-          ) | $(DOXYGEN) -
+-
+-xml/%.png: $(diagramsdir)/%.gv | $(CURDIR)/xml
+-	$(AM_V_GEN)$(DOT) -Tpng -o$@ $<
+-
+-xml/%.map: $(diagramsdir)/%.gv | $(CURDIR)/xml
+-	$(AM_V_GEN)$(DOT) -Tcmapx_np -o$@ $<
+-
+-# general rule to create one of the listed directories.
+-$(alldirs):
+-	$(AM_V_GEN)$(MKDIR_P) $@
+-
+-# there is no man-local
+-all-local: man/man3/wl_display.3
+-
+-clean-local:
+-	rm -rf xml/
+-	rm -rf html/
+-	rm -rf man/
+-
+-EXTRA_DIST = $(diagramssrc)
+diff --git a/third_party/wayland/src/doc/publican/Makefile.am b/third_party/wayland/src/doc/publican/Makefile.am
+deleted file mode 100644
+index e861fe6..0000000
+--- a/third_party/wayland/src/doc/publican/Makefile.am
++++ /dev/null
+@@ -1,169 +0,0 @@
+-# Documentation is built with xmlto, but some of the recipes in here are
+-# leftovers from building with Publican (https://fedorahosted.org/publican/)
+-#
+-# How this build works:
+-# * the main target is Wayland, documentation ends up in $(builddir)/Wayland/
+-# * hand-written chapters and CSS files are located in sources. These are
+-#   copied into $(builddir)/en-US/
+-# * ProtocolSpec.xml is generated from $(top_srcdir)/protocol/wayland.xml,
+-#   changed into docbook via XSLT and saved in $(builddir)/en-US/
+-# * ProtocolInterfaces.xml, same as above, uses a different XSLT
+-# * *API.xml is generated from the doxygen output and saved in
+-#   $(builddir)/en-US
+-# * run xmlto on $(builddir)/en-US, output to $(builddir)/Wayland/en-US
+-
+-doxydir := $(top_builddir)/doc/doxygen
+-html_destdir := $(builddir)/Wayland/en-US/html
+-
+-publican_sources = \
+-	$(srcdir)/sources/Wayland.ent \
+-	$(srcdir)/sources/Wayland.xml \
+-	$(srcdir)/sources/Book_Info.xml \
+-	$(srcdir)/sources/Author_Group.xml \
+-	$(srcdir)/sources/Foreword.xml \
+-	$(srcdir)/sources/Preface.xml \
+-	$(srcdir)/sources/Revision_History.xml \
+-	$(srcdir)/sources/Protocol.xml \
+-	$(srcdir)/sources/Xwayland.xml \
+-	$(srcdir)/sources/Compositors.xml \
+-	$(srcdir)/sources/images/icon.svg  \
+-	$(srcdir)/sources/images/wayland.png \
+-	$(srcdir)/sources/images/xwayland-architecture.png \
+-	$(srcdir)/sources/Client.xml \
+-	$(srcdir)/sources/Server.xml
+-
+-processed_sources := \
+-	$(srcdir)/sources/Architecture.xml \
+-	$(srcdir)/sources/Introduction.xml
+-
+-css_sources = \
+-	$(srcdir)/sources/css/brand.css \
+-	$(srcdir)/sources/css/common.css \
+-	$(srcdir)/sources/css/default.css \
+-	$(srcdir)/sources/css/epub.css \
+-	$(srcdir)/sources/css/print.css
+-
+-img_sources = \
+-	$(srcdir)/sources/images/icon.svg \
+-	$(srcdir)/sources/images/wayland.png \
+-	$(srcdir)/sources/images/xwayland-architecture.png
+-
+-doxygen_img_sources := \
+-	$(doxydir)/xml/wayland-architecture.png \
+-	$(doxydir)/xml/x-architecture.png
+-
+-map_sources := \
+-	$(doxydir)/xml/x-architecture.map \
+-	$(doxydir)/xml/wayland-architecture.map
+-
+-if HAVE_XMLTO
+-if HAVE_XSLTPROC
+-noinst_DATA = $(builddir)/Wayland $(publican_targets)
+-XMLTO_PARAM = \
+-	--skip-validation \
+-	--stringparam chunk.section.depth=0 \
+-	--stringparam toc.section.depth=1 \
+-	--stringparam html.stylesheet=css/default.css
+-
+-# Listing various directories that might need to be created.
+-alldirs := $(builddir)/en-US $(builddir)/en-US/images $(html_destdir) $(html_destdir)/css $(html_destdir)/images
+-
+-
+-html_css_targets = $(addprefix $(html_destdir)/css/,$(notdir $(css_sources)))
+-html_img_targets = $(addprefix $(html_destdir)/images/,$(notdir $(img_sources)))
+-doxygen_img_targets := $(doxygen_img_sources:$(doxydir)/xml/%=$(html_destdir)/images/%)
+-map_targets := $(map_sources:$(doxydir)/xml/%=$(builddir)/en-US/images/%)
+-processed_targets := $(processed_sources:$(srcdir)/sources/%=$(builddir)/en-US/%)
+-
+-$(builddir)/Wayland: $(publican_targets) $(html_css_targets) $(html_img_targets) $(processed_targets) $(doxygen_img_targets) | $(builddir)/en-US
+-	$(AM_V_GEN)$(XMLTO) $(XMLTO_PARAM) html $(builddir)/en-US/Wayland.xml -o $(html_destdir)
+-	@touch $@
+-
+-$(html_destdir)/css/%: $(srcdir)/sources/css/% | $(html_destdir)/css
+-	$(AM_V_GEN)cp -f $< $@
+-
+-$(html_destdir)/images/%: $(srcdir)/sources/images/% | $(html_destdir)/images
+-	$(AM_V_GEN)cp -f $< $@
+-
+-$(html_destdir)/images/%: $(doxydir)/xml/% | $(html_destdir)/images
+-	$(AM_V_GEN)cp -f $< $@
+-
+-pubdir = $(docdir)/Wayland/en-US
+-
+-publican_targets = $(publican_sources:$(srcdir)/sources/%=$(builddir)/en-US/%) \
+-	$(builddir)/en-US/ProtocolSpec.xml \
+-	$(builddir)/en-US/ProtocolInterfaces.xml \
+-	$(builddir)/en-US/ClientAPI.xml \
+-	$(builddir)/en-US/ServerAPI.xml
+-
+-# The Protocol.xml is purely generated and required before running publican
+-$(builddir)/en-US/ProtocolSpec.xml: $(top_srcdir)/protocol/wayland.xml $(srcdir)/protocol-to-docbook.xsl | $(builddir)/en-US
+-	$(AM_V_GEN)$(XSLTPROC) $(srcdir)/protocol-to-docbook.xsl \
+-		$(top_srcdir)/protocol/wayland.xml > $@
+-
+-$(builddir)/en-US/ProtocolInterfaces.xml: $(top_srcdir)/protocol/wayland.xml $(srcdir)/protocol-interfaces-to-docbook.xsl | $(builddir)/en-US
+-	$(AM_V_GEN)$(XSLTPROC) $(srcdir)/protocol-interfaces-to-docbook.xsl \
+-		$(top_srcdir)/protocol/wayland.xml > $@
+-
+-# * use doxygen's combine.xslt to merge the xml files into one single file
+-# * pipe that through the doxygen-to-publican stylesheet
+-$(builddir)/en-US/%API.xml: $(doxydir)/xml/%/index.xml $(srcdir)/doxygen-to-publican.xsl | $(builddir)/en-US
+-	$(AM_V_GEN)$(XSLTPROC) $(doxydir)/xml/$*/combine.xslt \
+-		$(doxydir)/xml/$*/index.xml | \
+-		$(XSLTPROC) --stringparam which $* \
+-		$(srcdir)/doxygen-to-publican.xsl - > $@
+-
+-# Copy the sources source files into en-US destination
+-# This is required for out-of-source-tree build as publican does not allow us
+-# to specify the location of the source code.
+-$(builddir)/en-US/%: $(srcdir)/sources/% $(publican_sources) | $(builddir)/en-US/images
+-	$(AM_V_GEN)cp -f $< $@
+-	$(AM_V_at)chmod a+w $@
+-
+-$(builddir)/en-US/images/%: $(doxydir)/xml/% | $(builddir)/en-US/images
+-	$(AM_V_GEN)cp -f $< $@
+-	$(AM_V_at)chmod a+w $@
+-
+-# More specific rule to override explicitly listed targets and perform xslt
+-# modifications on them.
+-# Note that we can't use $< as all targets must be there
+-$(processed_targets): $(processed_sources) $(map_targets) $(srcdir)/merge-mapcoords.xsl | $(builddir)/en-US/images
+-	$(AM_V_GEN)$(XSLTPROC) --stringparam basedir $(builddir)/en-US \
+-		$(srcdir)/merge-mapcoords.xsl $(addprefix $(srcdir)/sources/,$(notdir $@)) > $@
+-
+-# general rule to create one of the listed directories.
+-$(alldirs):
+-	$(AM_V_GEN)$(MKDIR_P) $@
+-
+-CLEANFILES = $(publican_targets)
+-
+-clean-local:
+-	$(AM_V_at)rm -fr $(builddir)/en-US
+-	$(AM_V_at)rm -fr $(builddir)/Wayland
+-
+-install-data-local:
+-	test -z "$(pubdir)/html/css" || $(mkdir_p) "$(DESTDIR)$(pubdir)/html/css"
+-	test -z "$(pubdir)/html/images" || $(mkdir_p) "$(DESTDIR)$(pubdir)/html/images"
+-	list=`find $(builddir)/Wayland/en-US -type f`; \
+-	for p in $$list; do \
+-	  echo " $(INSTALL_DATA) '$$p' '$(DESTDIR)$(docdir)/$$p'"; \
+-	  $(INSTALL_DATA) "$$p" "$(DESTDIR)$(docdir)/$$p"; \
+-	done;
+-
+-uninstall-local:
+-	@if test -n $(DESTDIR)$(docdir); then \
+-	  if test -d $(DESTDIR)$(docdir); then \
+-	    echo " rm -fr $(DESTDIR)$(docdir)/Wayland;"; \
+-	    rm -fr $(DESTDIR)$(docdir)/Wayland; \
+-	  fi; \
+-	fi;
+-
+-endif
+-endif
+-
+-EXTRA_DIST = \
+-	$(publican_sources) $(processed_sources) $(css_sources) $(img_sources) \
+-	protocol-to-docbook.xsl \
+-	protocol-interfaces-to-docbook.xsl \
+-	doxygen-to-publican.xsl \
+-	merge-mapcoords.xsl
+diff --git a/third_party/wayland/src/egl/meson.build b/third_party/wayland/src/egl/meson.build
+index dee9b1d..065fd07 100644
+--- a/third_party/wayland/src/egl/meson.build
++++ b/third_party/wayland/src/egl/meson.build
+@@ -5,7 +5,7 @@ wayland_egl = library(
+ 		wayland_client_protocol_h
+ 	],
+ 	include_directories: src_inc,
+-	version: '1.0.0',
++	version: meson.project_version(),
+ 	install: true
+ )
+ 
+@@ -41,3 +41,12 @@ pkgconfig.generate(
+ 	description: 'Backend wayland-egl interface',
+ 	version: '3'
+ )
++
++wayland_egl_dep = declare_dependency(
++	link_with: wayland_egl,
++	include_directories: [ root_inc, include_directories('.') ],
++)
++
++if meson.version().version_compare('>= 0.54.0')
++	meson.override_dependency('wayland-egl', wayland_egl_dep)
++endif
+diff --git a/third_party/wayland/src/egl/wayland-egl-backend.h b/third_party/wayland/src/egl/wayland-egl-backend.h
+index 869c86f..e5287b7 100644
+--- a/third_party/wayland/src/egl/wayland-egl-backend.h
++++ b/third_party/wayland/src/egl/wayland-egl-backend.h
+@@ -35,8 +35,8 @@ extern "C" {
+ #endif
+ 
+ /*
+- * NOTE: This version must be kept in sync with the Version field in the
+- * wayland-egl-backend.pc.in file.
++ * NOTE: This version must be kept in sync with the version field in the
++ * wayland-egl-backend pkgconfig file generated in meson.build.
+  */
+ #define WL_EGL_WINDOW_VERSION 3
+ 
+diff --git a/third_party/wayland/src/egl/wayland-egl-backend.pc.in b/third_party/wayland/src/egl/wayland-egl-backend.pc.in
+deleted file mode 100644
+index 6cf0ed4..0000000
+--- a/third_party/wayland/src/egl/wayland-egl-backend.pc.in
++++ /dev/null
+@@ -1,9 +0,0 @@
+-prefix=@prefix@
+-exec_prefix=@exec_prefix@
+-includedir=@includedir@
+-
+-Name: wayland-egl-backend
+-Description: Backend wayland-egl interface
+-Version: 3
+-Libs:
+-Cflags: -I${includedir}
+diff --git a/third_party/wayland/src/egl/wayland-egl.c b/third_party/wayland/src/egl/wayland-egl.c
+index a60f899..36a3471 100644
+--- a/third_party/wayland/src/egl/wayland-egl.c
++++ b/third_party/wayland/src/egl/wayland-egl.c
+@@ -35,6 +35,20 @@
+ #include "wayland-util.h"
+ 
+ 
++/** Resize the EGL window
++ *
++ * \param egl_window A pointer to a struct wl_egl_window
++ * \param width The new width
++ * \param height The new height
++ * \param dx Offset on the X axis
++ * \param dy Offset on the Y axis
++ *
++ * Note that applications should prefer using the wl_surface.offset request if
++ * the associated wl_surface has the interface version 5 or higher.
++ *
++ * If the wl_surface.offset request is used, applications MUST pass 0 to both
++ * dx and dy.
++ */
+ WL_EXPORT void
+ wl_egl_window_resize(struct wl_egl_window *egl_window,
+ 		     int width, int height,
+diff --git a/third_party/wayland/src/egl/wayland-egl.pc.in b/third_party/wayland/src/egl/wayland-egl.pc.in
+deleted file mode 100644
+index 2e2d4c4..0000000
+--- a/third_party/wayland/src/egl/wayland-egl.pc.in
++++ /dev/null
+@@ -1,11 +0,0 @@
+-prefix=@prefix@
+-exec_prefix=@exec_prefix@
+-libdir=@libdir@
+-includedir=@includedir@
+-
+-Name: wayland-egl
+-Description: Frontend wayland-egl library
+-Version: 18.1.0
+-Requires: wayland-client
+-Libs: -L${libdir} -lwayland-egl
+-Cflags: -I${includedir}
+diff --git a/third_party/wayland/src/m4/.gitignore b/third_party/wayland/src/m4/.gitignore
+deleted file mode 100644
+index 38066dd..0000000
+--- a/third_party/wayland/src/m4/.gitignore
++++ /dev/null
+@@ -1,5 +0,0 @@
+-libtool.m4
+-ltoptions.m4
+-ltsugar.m4
+-ltversion.m4
+-lt~obsolete.m4
+diff --git a/third_party/wayland/src/m4/weston.m4 b/third_party/wayland/src/m4/weston.m4
+deleted file mode 100644
+index 636f9fb..0000000
+--- a/third_party/wayland/src/m4/weston.m4
++++ /dev/null
+@@ -1,37 +0,0 @@
+-dnl
+-dnl Copyright © 2016 Quentin “Sardem FF7” Glidic
+-dnl
+-dnl Permission is hereby granted, free of charge, to any person obtaining a
+-dnl copy of this software and associated documentation files (the "Software"),
+-dnl to deal in the Software without restriction, including without limitation
+-dnl the rights to use, copy, modify, merge, publish, distribute, sublicense,
+-dnl and/or sell copies of the Software, and to permit persons to whom the
+-dnl Software is furnished to do so, subject to the following conditions:
+-dnl
+-dnl The above copyright notice and this permission notice (including the next
+-dnl paragraph) shall be included in all copies or substantial portions of the
+-dnl Software.
+-dnl
+-dnl THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-dnl IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+-dnl FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+-dnl THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+-dnl LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+-dnl FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+-dnl DEALINGS IN THE SOFTWARE.
+-dnl
+-
+-dnl WESTON_SEARCH_LIBS(PREFIX, search-libs, function, [action-if-found], [action-if-not-found], [other-libraries])
+-dnl WESTON_SEARCH_LIBS is a wrapper around AC_SEARCH_LIBS with a little difference:
+-dnl action-if-found is called even if no library is required
+-AC_DEFUN([WESTON_SEARCH_LIBS], [
+-	weston_save_LIBS=${LIBS}
+-	AC_SEARCH_LIBS([$3], [$2], [$4], [$5], [$6])
+-	AS_CASE([${ac_cv_search_][$3][}],
+-		['none required'], [$4],
+-		[no], [],
+-		[$1][_LIBS=${ac_cv_search_][$3][}]
+-	)
+-	AC_SUBST([$1][_LIBS])
+-	LIBS=${weston_save_LIBS}
+-])
+diff --git a/third_party/wayland/src/meson.build b/third_party/wayland/src/meson.build
+index 11c35fa..3bc25c9 100644
+--- a/third_party/wayland/src/meson.build
++++ b/third_party/wayland/src/meson.build
+@@ -1,6 +1,6 @@
+ project(
+-	'wayland', 'c', 'cpp',
+-	version: '1.19.0',
++	'wayland', 'c',
++	version: '1.20.0',
+ 	license: 'MIT',
+ 	meson_version: '>= 0.52.1',
+ 	default_options: [
+@@ -8,6 +8,7 @@ project(
+ 		'buildtype=debugoptimized'
+ 	]
+ )
++wayland_version = meson.project_version().split('.')
+ 
+ config_h = configuration_data()
+ config_h.set_quoted('PACKAGE', meson.project_name())
+@@ -26,7 +27,7 @@ add_project_arguments(
+ 	language: 'c'
+ )
+ 
+-foreach h: [ 'sys/prctl.h' ]
++foreach h: [ 'sys/prctl.h', 'sys/procctl.h', 'sys/ucred.h' ]
+ 	config_h.set('HAVE_' + h.underscorify().to_upper(), cc.has_header(h))
+ endforeach
+ 
+@@ -36,13 +37,39 @@ have_funcs = [
+ 	'posix_fallocate',
+ 	'prctl',
+ 	'memfd_create',
++	'mremap',
+ 	'strndup',
+ ]
+ foreach f: have_funcs
+ 	config_h.set('HAVE_' + f.underscorify().to_upper(), cc.has_function(f))
+ endforeach
++config_h.set10('HAVE_XUCRED_CR_PID', cc.has_member('struct xucred', 'cr_pid', prefix : '#include <sys/ucred.h>'))
++have_broken_msg_cmsg_cloexec = false
++if host_machine.system() == 'freebsd'
++	have_broken_msg_cmsg_cloexec = not cc.compiles('''
++#include <sys/param.h> /* To get __FreeBSD_version. */
++#if __FreeBSD_version < 1300502 || \
++    (__FreeBSD_version >= 1400000 && __FreeBSD_version < 1400006)
++/*
++ * FreeBSD had a broken implementation of MSG_CMSG_CLOEXEC between 2015 and
++ * 2021. Check if we are compiling against a version that includes the fix
++ * (https://cgit.freebsd.org/src/commit/?id=6ceacebdf52211).
++ */
++#error "Broken MSG_CMSG_CLOEXEC"
++#endif
++''', name : 'MSG_CMSG_CLOEXEC works correctly')
++endif
++config_h.set10('HAVE_BROKEN_MSG_CMSG_CLOEXEC', have_broken_msg_cmsg_cloexec)
+ 
+ if get_option('libraries')
++	if host_machine.system() == 'freebsd'
++		# When building for FreeBSD, epoll(7) is provided by a userspace
++		# wrapper around kqueue(2).
++		epoll_dep = dependency('epoll-shim')
++	else
++		# Otherwise, assume that epoll(7) is supported natively.
++		epoll_dep = []
++	endif
+ 	ffi_dep = dependency('libffi')
+ 
+ 	decls = [
+@@ -52,7 +79,7 @@ if get_option('libraries')
+ 	]
+ 
+ 	foreach d: decls
+-		if not cc.has_header_symbol(d['header'], d['symbol'])
++		if not cc.has_header_symbol(d['header'], d['symbol'], dependencies: epoll_dep)
+ 			error('@0@ is needed to compile Wayland libraries'.format(d['symbol']))
+ 		endif
+ 	endforeach
+@@ -66,13 +93,6 @@ if get_option('libraries')
+ 	endif
+ endif
+ 
+-scanner_deps = [ dependency('expat') ]
+-
+-if get_option('dtd_validation')
+-	scanner_deps += dependency('libxml-2.0')
+-	config_h.set('HAVE_LIBXML', 1)
+-endif
+-
+ configure_file(
+ 	output: 'config.h',
+ 	configuration: config_h,
+@@ -91,7 +111,9 @@ subdir('src')
+ if get_option('libraries')
+ 	subdir('cursor')
+ 	subdir('egl')
+-	subdir('tests')
++	if get_option('tests')
++		subdir('tests')
++	endif
+ 	if get_option('documentation')
+ 		subdir('doc')
+ 	endif
+diff --git a/third_party/wayland/src/meson_options.txt b/third_party/wayland/src/meson_options.txt
+index de588d1..4433fa0 100644
+--- a/third_party/wayland/src/meson_options.txt
++++ b/third_party/wayland/src/meson_options.txt
+@@ -6,6 +6,10 @@ option('scanner',
+   description: 'Compile wayland-scanner binary',
+   type: 'boolean',
+   value: 'true')
++option('tests',
++  description: 'Compile Wayland tests',
++  type: 'boolean',
++  value: 'true')
+ option('documentation',
+   description: 'Build the documentation (requires Doxygen, dot, xmlto, xsltproc)',
+   type: 'boolean',
+diff --git a/third_party/wayland/src/protocol/wayland.dtd b/third_party/wayland/src/protocol/wayland.dtd
+index 15f20ab..ee062ee 100644
+--- a/third_party/wayland/src/protocol/wayland.dtd
++++ b/third_party/wayland/src/protocol/wayland.dtd
+@@ -10,6 +10,7 @@
+   <!ATTLIST request since CDATA #IMPLIED>
+ <!ELEMENT event (description?,arg*)>
+   <!ATTLIST event name CDATA #REQUIRED>
++  <!ATTLIST event type CDATA #IMPLIED>
+   <!ATTLIST event since CDATA #IMPLIED>
+ <!ELEMENT enum (description?,entry*)>
+   <!ATTLIST enum name CDATA #REQUIRED>
+diff --git a/third_party/wayland/src/protocol/wayland.xml b/third_party/wayland/src/protocol/wayland.xml
+index 471daf6..784d971 100644
+--- a/third_party/wayland/src/protocol/wayland.xml
++++ b/third_party/wayland/src/protocol/wayland.xml
+@@ -179,7 +179,7 @@
+       the related request is done.
+     </description>
+ 
+-    <event name="done">
++    <event name="done" type="destructor">
+       <description summary="done event">
+ 	Notify the client when the related request is done.
+       </description>
+@@ -187,7 +187,7 @@
+     </event>
+   </interface>
+ 
+-  <interface name="wl_compositor" version="4">
++  <interface name="wl_compositor" version="5">
+     <description summary="the compositor singleton">
+       A compositor.  This object is a singleton global.  The
+       compositor is in charge of combining the contents of multiple
+@@ -296,6 +296,9 @@
+ 	The drm format codes match the macros defined in drm_fourcc.h, except
+ 	argb8888 and xrgb8888. The formats actually supported by the compositor
+ 	will be reported by the format event.
++
++	For all wl_shm formats and unless specified in another protocol
++	extension, pre-multiplied alpha is used for pixel values.
+       </description>
+       <!-- Note to protocol writers: don't update this list manually, instead
+ 	   run the automated script that keeps it in sync with drm_fourcc.h. -->
+@@ -403,6 +406,10 @@
+       <entry name="nv15" value="0x3531564e" summary="2x2 subsampled Cr:Cb plane"/>
+       <entry name="q410" value="0x30313451"/>
+       <entry name="q401" value="0x31303451"/>
++      <entry name="xrgb16161616" value="0x38345258" summary="[63:0] x:R:G:B 16:16:16:16 little endian"/>
++      <entry name="xbgr16161616" value="0x38344258" summary="[63:0] x:B:G:R 16:16:16:16 little endian"/>
++      <entry name="argb16161616" value="0x38345241" summary="[63:0] A:R:G:B 16:16:16:16 little endian"/>
++      <entry name="abgr16161616" value="0x38344241" summary="[63:0] A:B:G:R 16:16:16:16 little endian"/>
+     </enum>
+ 
+     <request name="create_pool">
+@@ -431,10 +438,15 @@
+   <interface name="wl_buffer" version="1">
+     <description summary="content for a wl_surface">
+       A buffer provides the content for a wl_surface. Buffers are
+-      created through factory interfaces such as wl_drm, wl_shm or
+-      similar. It has a width and a height and can be attached to a
+-      wl_surface, but the mechanism by which a client provides and
+-      updates the contents is defined by the buffer factory interface.
++      created through factory interfaces such as wl_shm, wp_linux_buffer_params
++      (from the linux-dmabuf protocol extension) or similar. It has a width and
++      a height and can be attached to a wl_surface, but the mechanism by which a
++      client provides and updates the contents is defined by the buffer factory
++      interface.
++
++      If the buffer uses a format that has an alpha channel, the alpha channel
++      is assumed to be premultiplied in the color channels unless otherwise
++      specified.
+     </description>
+ 
+     <request name="destroy" type="destructor">
+@@ -948,9 +960,10 @@
+ 	immediately before receiving keyboard focus and when a new
+ 	selection is set while the client has keyboard focus.  The
+ 	data_offer is valid until a new data_offer or NULL is received
+-	or until the client loses keyboard focus.  The client must
+-	destroy the previous selection data_offer, if any, upon receiving
+-	this event.
++	or until the client loses keyboard focus.  Switching surface with
++	keyboard focus within the same client doesn't mean a new selection
++	will be sent.  The client must destroy the previous selection
++	data_offer, if any, upon receiving this event.
+       </description>
+       <arg name="id" type="object" interface="wl_data_offer" allow-null="true"
+ 	   summary="selection data_offer object"/>
+@@ -1332,7 +1345,7 @@
+     </event>
+   </interface>
+ 
+-  <interface name="wl_surface" version="4">
++  <interface name="wl_surface" version="5">
+     <description summary="an onscreen surface">
+       A surface is a rectangular area that may be displayed on zero
+       or more outputs, and shown any number of times at the compositor's
+@@ -1384,6 +1397,7 @@
+       <entry name="invalid_scale" value="0" summary="buffer scale value is invalid"/>
+       <entry name="invalid_transform" value="1" summary="buffer transform value is invalid"/>
+       <entry name="invalid_size" value="2" summary="buffer size is invalid"/>
++      <entry name="invalid_offset" value="3" summary="buffer offset is invalid"/>
+     </enum>
+ 
+     <request name="destroy" type="destructor">
+@@ -1406,7 +1420,14 @@
+ 	buffer's upper left corner, relative to the current buffer's upper
+ 	left corner, in surface-local coordinates. In other words, the
+ 	x and y, combined with the new surface size define in which
+-	directions the surface's size changes.
++	directions the surface's size changes. Setting anything other than 0
++	as x and y arguments is discouraged, and should instead be replaced
++	with using the separate wl_surface.offset request.
++
++	When the bound wl_surface version is 5 or higher, passing any
++	non-zero x or y is a protocol violation, and will result in an
++	'invalid_offset' error being raised. To achieve equivalent semantics,
++	use wl_surface.offset.
+ 
+ 	Surface contents are double-buffered state, see wl_surface.commit.
+ 
+@@ -1434,9 +1455,12 @@
+ 	from the same backing storage or use wp_linux_buffer_release.
+ 
+ 	Destroying the wl_buffer after wl_buffer.release does not change
+-	the surface contents. However, if the client destroys the
+-	wl_buffer before receiving the wl_buffer.release event, the surface
+-	contents become undefined immediately.
++	the surface contents. Destroying the wl_buffer before wl_buffer.release
++	is allowed as long as the underlying buffer storage isn't re-used (this
++	can happen e.g. on client process termination). However, if the client
++	destroys the wl_buffer before receiving the wl_buffer.release event and
++	mutates the underlying buffer storage, the surface contents become
++	undefined immediately.
+ 
+ 	If wl_surface.attach is sent with a NULL wl_buffer, the
+ 	following wl_surface.commit will remove the surface content.
+@@ -1734,6 +1758,27 @@
+       <arg name="width" type="int" summary="width of damage rectangle"/>
+       <arg name="height" type="int" summary="height of damage rectangle"/>
+     </request>
++
++    <!-- Version 5 additions -->
++
++    <request name="offset" since="5">
++      <description summary="set the surface contents offset">
++	The x and y arguments specify the location of the new pending
++	buffer's upper left corner, relative to the current buffer's upper
++	left corner, in surface-local coordinates. In other words, the
++	x and y, combined with the new surface size define in which
++	directions the surface's size changes.
++
++	Surface location offset is double-buffered state, see
++	wl_surface.commit.
++
++	This request is semantically equivalent to and the replaces the x and y
++	arguments in the wl_surface.attach request in wl_surface versions prior
++	to 5. See wl_surface.attach for details.
++      </description>
++      <arg name="x" type="int" summary="surface-local x coordinate"/>
++      <arg name="y" type="int" summary="surface-local y coordinate"/>
++    </request>
+    </interface>
+ 
+   <interface name="wl_seat" version="7">
+@@ -1838,9 +1883,22 @@
+ 
+     <event name="name" since="2">
+       <description summary="unique identifier for this seat">
+-	In a multiseat configuration this can be used by the client to help
+-	identify which physical devices the seat represents. Based on
+-	the seat configuration used by the compositor.
++	In a multi-seat configuration the seat name can be used by clients to
++	help identify which physical devices the seat represents.
++
++	The seat name is a UTF-8 string with no convention defined for its
++	contents. Each name is unique among all wl_seat globals. The name is
++	only guaranteed to be unique for the current compositor instance.
++
++	The same seat names are used for all clients. Thus, the name can be
++	shared across processes to refer to a specific wl_seat global.
++
++	The name event is sent after binding to the seat global. This event is
++	only sent once per seat object, and the name does not change over the
++	lifetime of the wl_seat global.
++
++	Compositors may re-use the same seat name if the wl_seat global is
++	destroyed and re-created later.
+       </description>
+       <arg name="name" type="string" summary="seat identifier"/>
+     </event>
+@@ -1905,6 +1963,10 @@
+ 	wl_surface is no longer used as the cursor. When the use as a
+ 	cursor ends, the current and pending input regions become
+ 	undefined, and the wl_surface is unmapped.
++
++	The serial parameter must match the latest wl_pointer.enter
++	serial number sent to the client. Otherwise the request will be
++	ignored.
+       </description>
+       <arg name="serial" type="uint" summary="serial number of the enter event"/>
+       <arg name="surface" type="object" interface="wl_surface" allow-null="true"
+@@ -2199,7 +2261,8 @@
+     <event name="keymap">
+       <description summary="keyboard mapping">
+ 	This event provides a file descriptor to the client which can be
+-	memory-mapped to provide a keyboard mapping description.
++	memory-mapped in read-only mode to provide a keyboard mapping
++	description.
+ 
+ 	From version 7 onwards, the fd must be mapped with MAP_PRIVATE by
+ 	the recipient, as MAP_SHARED may fail.
+@@ -2449,7 +2512,7 @@
+     </event>
+   </interface>
+ 
+-  <interface name="wl_output" version="3">
++  <interface name="wl_output" version="4">
+     <description summary="compositor output region">
+       An output describes part of the compositor geometry.  The
+       compositor works in the 'compositor coordinate system' and an
+@@ -2505,12 +2568,15 @@
+ 	The physical size can be set to zero if it doesn't make sense for this
+ 	output (e.g. for projectors or virtual outputs).
+ 
++	The geometry event will be followed by a done event (starting from
++	version 2).
++
+ 	Note: wl_output only advertises partial information about the output
+ 	position and identification. Some compositors, for instance those not
+ 	implementing a desktop-style output layout or those exposing virtual
+ 	outputs, might fake this information. Instead of using x and y, clients
+ 	should use xdg_output.logical_position. Instead of using make and model,
+-	clients should use xdg_output.name and xdg_output.description.
++	clients should use name and description.
+       </description>
+       <arg name="x" type="int"
+ 	   summary="x position within the global compositor space"/>
+@@ -2566,6 +2632,9 @@
+ 	The vertical refresh rate can be set to zero if it doesn't make
+ 	sense for this output (e.g. for virtual outputs).
+ 
++	The mode event will be followed by a done event (starting from
++	version 2).
++
+ 	Clients should not use the refresh rate to schedule frames. Instead,
+ 	they should use the wl_surface.frame event or the presentation-time
+ 	protocol.
+@@ -2612,6 +2681,8 @@
+ 	the scale of the output. That way the compositor can
+ 	avoid scaling the surface, and the client can supply
+ 	a higher detail image.
++
++	The scale event will be followed by a done event.
+       </description>
+       <arg name="factor" type="int" summary="scaling factor of output"/>
+     </event>
+@@ -2624,6 +2695,62 @@
+ 	use the output object anymore.
+       </description>
+     </request>
++
++    <!-- Version 4 additions -->
++
++    <event name="name" since="4">
++      <description summary="name of this output">
++	Many compositors will assign user-friendly names to their outputs, show
++	them to the user, allow the user to refer to an output, etc. The client
++	may wish to know this name as well to offer the user similar behaviors.
++
++	The name is a UTF-8 string with no convention defined for its contents.
++	Each name is unique among all wl_output globals. The name is only
++	guaranteed to be unique for the compositor instance.
++
++	The same output name is used for all clients for a given wl_output
++	global. Thus, the name can be shared across processes to refer to a
++	specific wl_output global.
++
++	The name is not guaranteed to be persistent across sessions, thus cannot
++	be used to reliably identify an output in e.g. configuration files.
++
++	Examples of names include 'HDMI-A-1', 'WL-1', 'X11-1', etc. However, do
++	not assume that the name is a reflection of an underlying DRM connector,
++	X11 connection, etc.
++
++	The name event is sent after binding the output object. This event is
++	only sent once per output object, and the name does not change over the
++	lifetime of the wl_output global.
++
++	Compositors may re-use the same output name if the wl_output global is
++	destroyed and re-created later. Compositors should avoid re-using the
++	same name if possible.
++
++	The name event will be followed by a done event.
++      </description>
++      <arg name="name" type="string" summary="output name"/>
++    </event>
++
++    <event name="description" since="4">
++      <description summary="human-readable description of this output">
++	Many compositors can produce human-readable descriptions of their
++	outputs. The client may wish to know this description as well, e.g. for
++	output selection purposes.
++
++	The description is a UTF-8 string with no convention defined for its
++	contents. The description is not guaranteed to be unique among all
++	wl_output globals. Examples might include 'Foocorp 11" Display' or
++	'Virtual X11 output via :1'.
++
++	The description event is sent after binding the output object and
++	whenever the description changes. The description is optional, and may
++	not be sent at all.
++
++	The description event will be followed by a done event.
++      </description>
++      <arg name="description" type="string" summary="output description"/>
++    </event>
+   </interface>
+ 
+   <interface name="wl_region" version="1">
+diff --git a/third_party/wayland/src/releasing.txt b/third_party/wayland/src/releasing.txt
+index 1481f7c..db87971 100644
+--- a/third_party/wayland/src/releasing.txt
++++ b/third_party/wayland/src/releasing.txt
+@@ -3,16 +3,16 @@ To make a release of Wayland, follow these steps.
+   0.  Verify the test suites and codebase checks pass.  All of the
+       tests should either pass or skip.
+ 
+-      $ make check
++      $ ninja -C build/ test
+ 
+-  1.  Update the first stanza of configure.ac to the intended version.
++  1.  Update the first stanza of meson.build to the intended version.
+ 
+       Then commit your changes:
+ 
+       $ export RELEASE_NUMBER="x.y.z"
+       $ export RELEASE_NAME="[alpha|beta|RC1|RC2|official|point]"
+       $ git status
+-      $ git commit configure.ac -m "configure.ac: bump to version $RELEASE_NUMBER for the $RELEASE_NAME release"
++      $ git commit meson.build -m "build: bump to version $RELEASE_NUMBER for the $RELEASE_NAME release"
+       $ git push
+ 
+   2.  Run the release.sh script to generate the tarballs, sign and
+@@ -69,9 +69,9 @@ development early).
+     $ git branch x.y [sha]
+     $ git push origin x.y
+ 
+-The master branch's configure.ac version should always be (at least)
++The master branch's meson.build version should always be (at least)
+ x.y.90, with x.y being the most recent stable branch.  The stable
+-branch's configure.ac version is just whatever was most recently
++branch's meson.build version is just whatever was most recently
+ released from that branch.
+ 
+ For stable branches, we commit fixes to master first, then cherry-pick
+diff --git a/third_party/wayland/src/src/connection.c b/third_party/wayland/src/src/connection.c
+index d0c7d9f..98f503b 100644
+--- a/third_party/wayland/src/src/connection.c
++++ b/third_party/wayland/src/src/connection.c
+@@ -54,7 +54,7 @@ div_roundup(uint32_t n, size_t a)
+ 	return (uint32_t) (((uint64_t) n + (a - 1)) / a);
+ }
+ 
+-struct wl_buffer {
++struct wl_ring_buffer {
+ 	char data[4096];
+ 	uint32_t head, tail;
+ };
+@@ -65,14 +65,14 @@ struct wl_buffer {
+ #define CLEN		(CMSG_LEN(MAX_FDS_OUT * sizeof(int32_t)))
+ 
+ struct wl_connection {
+-	struct wl_buffer in, out;
+-	struct wl_buffer fds_in, fds_out;
++	struct wl_ring_buffer in, out;
++	struct wl_ring_buffer fds_in, fds_out;
+ 	int fd;
+ 	int want_flush;
+ };
+ 
+ static int
+-wl_buffer_put(struct wl_buffer *b, const void *data, size_t count)
++ring_buffer_put(struct wl_ring_buffer *b, const void *data, size_t count)
+ {
+ 	uint32_t head, size;
+ 
+@@ -98,7 +98,7 @@ wl_buffer_put(struct wl_buffer *b, const void *data, size_t count)
+ }
+ 
+ static void
+-wl_buffer_put_iov(struct wl_buffer *b, struct iovec *iov, int *count)
++ring_buffer_put_iov(struct wl_ring_buffer *b, struct iovec *iov, int *count)
+ {
+ 	uint32_t head, tail;
+ 
+@@ -122,7 +122,7 @@ wl_buffer_put_iov(struct wl_buffer *b, struct iovec *iov, int *count)
+ }
+ 
+ static void
+-wl_buffer_get_iov(struct wl_buffer *b, struct iovec *iov, int *count)
++ring_buffer_get_iov(struct wl_ring_buffer *b, struct iovec *iov, int *count)
+ {
+ 	uint32_t head, tail;
+ 
+@@ -146,7 +146,7 @@ wl_buffer_get_iov(struct wl_buffer *b, struct iovec *iov, int *count)
+ }
+ 
+ static void
+-wl_buffer_copy(struct wl_buffer *b, void *data, size_t count)
++ring_buffer_copy(struct wl_ring_buffer *b, void *data, size_t count)
+ {
+ 	uint32_t tail, size;
+ 
+@@ -161,7 +161,7 @@ wl_buffer_copy(struct wl_buffer *b, void *data, size_t count)
+ }
+ 
+ static uint32_t
+-wl_buffer_size(struct wl_buffer *b)
++ring_buffer_size(struct wl_ring_buffer *b)
+ {
+ 	return b->head - b->tail;
+ }
+@@ -181,16 +181,16 @@ wl_connection_create(int fd)
+ }
+ 
+ static void
+-close_fds(struct wl_buffer *buffer, int max)
++close_fds(struct wl_ring_buffer *buffer, int max)
+ {
+ 	int32_t fds[sizeof(buffer->data) / sizeof(int32_t)], i, count;
+ 	size_t size;
+ 
+-	size = wl_buffer_size(buffer);
++	size = ring_buffer_size(buffer);
+ 	if (size == 0)
+ 		return;
+ 
+-	wl_buffer_copy(buffer, fds, size);
++	ring_buffer_copy(buffer, fds, size);
+ 	count = size / sizeof fds[0];
+ 	if (max > 0 && max < count)
+ 		count = max;
+@@ -221,7 +221,7 @@ wl_connection_destroy(struct wl_connection *connection)
+ void
+ wl_connection_copy(struct wl_connection *connection, void *data, size_t size)
+ {
+-	wl_buffer_copy(&connection->in, data, size);
++	ring_buffer_copy(&connection->in, data, size);
+ }
+ 
+ void
+@@ -231,12 +231,12 @@ wl_connection_consume(struct wl_connection *connection, size_t size)
+ }
+ 
+ static void
+-build_cmsg(struct wl_buffer *buffer, char *data, int *clen)
++build_cmsg(struct wl_ring_buffer *buffer, char *data, int *clen)
+ {
+ 	struct cmsghdr *cmsg;
+ 	size_t size;
+ 
+-	size = wl_buffer_size(buffer);
++	size = ring_buffer_size(buffer);
+ 	if (size > MAX_FDS_OUT * sizeof(int32_t))
+ 		size = MAX_FDS_OUT * sizeof(int32_t);
+ 
+@@ -245,7 +245,7 @@ build_cmsg(struct wl_buffer *buffer, char *data, int *clen)
+ 		cmsg->cmsg_level = SOL_SOCKET;
+ 		cmsg->cmsg_type = SCM_RIGHTS;
+ 		cmsg->cmsg_len = CMSG_LEN(size);
+-		wl_buffer_copy(buffer, CMSG_DATA(cmsg), size);
++		ring_buffer_copy(buffer, CMSG_DATA(cmsg), size);
+ 		*clen = cmsg->cmsg_len;
+ 	} else {
+ 		*clen = 0;
+@@ -253,7 +253,7 @@ build_cmsg(struct wl_buffer *buffer, char *data, int *clen)
+ }
+ 
+ static int
+-decode_cmsg(struct wl_buffer *buffer, struct msghdr *msg)
++decode_cmsg(struct wl_ring_buffer *buffer, struct msghdr *msg)
+ {
+ 	struct cmsghdr *cmsg;
+ 	size_t size, max, i;
+@@ -266,13 +266,13 @@ decode_cmsg(struct wl_buffer *buffer, struct msghdr *msg)
+ 			continue;
+ 
+ 		size = cmsg->cmsg_len - CMSG_LEN(0);
+-		max = sizeof(buffer->data) - wl_buffer_size(buffer);
++		max = sizeof(buffer->data) - ring_buffer_size(buffer);
+ 		if (size > max || overflow) {
+ 			overflow = 1;
+ 			size /= sizeof(int32_t);
+ 			for (i = 0; i < size; i++)
+ 				close(((int*)CMSG_DATA(cmsg))[i]);
+-		} else if (wl_buffer_put(buffer, CMSG_DATA(cmsg), size) < 0) {
++		} else if (ring_buffer_put(buffer, CMSG_DATA(cmsg), size) < 0) {
+ 				return -1;
+ 		}
+ 	}
+@@ -299,7 +299,7 @@ wl_connection_flush(struct wl_connection *connection)
+ 
+ 	tail = connection->out.tail;
+ 	while (connection->out.head - connection->out.tail > 0) {
+-		wl_buffer_get_iov(&connection->out, iov, &count);
++		ring_buffer_get_iov(&connection->out, iov, &count);
+ 
+ 		build_cmsg(&connection->fds_out, cmsg, &clen);
+ 
+@@ -332,7 +332,7 @@ wl_connection_flush(struct wl_connection *connection)
+ uint32_t
+ wl_connection_pending_input(struct wl_connection *connection)
+ {
+-	return wl_buffer_size(&connection->in);
++	return ring_buffer_size(&connection->in);
+ }
+ 
+ int
+@@ -343,12 +343,12 @@ wl_connection_read(struct wl_connection *connection)
+ 	char cmsg[CLEN];
+ 	int len, count, ret;
+ 
+-	if (wl_buffer_size(&connection->in) >= sizeof(connection->in.data)) {
++	if (ring_buffer_size(&connection->in) >= sizeof(connection->in.data)) {
+ 		errno = EOVERFLOW;
+ 		return -1;
+ 	}
+ 
+-	wl_buffer_put_iov(&connection->in, iov, &count);
++	ring_buffer_put_iov(&connection->in, iov, &count);
+ 
+ 	msg.msg_name = NULL;
+ 	msg.msg_namelen = 0;
+@@ -385,7 +385,7 @@ wl_connection_write(struct wl_connection *connection,
+ 			return -1;
+ 	}
+ 
+-	if (wl_buffer_put(&connection->out, data, count) < 0)
++	if (ring_buffer_put(&connection->out, data, count) < 0)
+ 		return -1;
+ 
+ 	connection->want_flush = 1;
+@@ -404,7 +404,7 @@ wl_connection_queue(struct wl_connection *connection,
+ 			return -1;
+ 	}
+ 
+-	return wl_buffer_put(&connection->out, data, count);
++	return ring_buffer_put(&connection->out, data, count);
+ }
+ 
+ int
+@@ -429,13 +429,13 @@ wl_connection_get_fd(struct wl_connection *connection)
+ static int
+ wl_connection_put_fd(struct wl_connection *connection, int32_t fd)
+ {
+-	if (wl_buffer_size(&connection->fds_out) == MAX_FDS_OUT * sizeof fd) {
++	if (ring_buffer_size(&connection->fds_out) == MAX_FDS_OUT * sizeof fd) {
+ 		connection->want_flush = 1;
+ 		if (wl_connection_flush(connection) < 0)
+ 			return -1;
+ 	}
+ 
+-	return wl_buffer_put(&connection->fds_out, &fd, sizeof fd);
++	return ring_buffer_put(&connection->fds_out, &fd, sizeof fd);
+ }
+ 
+ const char *
+@@ -749,6 +749,13 @@ wl_connection_demarshal(struct wl_connection *connection,
+ 		case 's':
+ 			length = *p++;
+ 
++			if (length == 0 && !arg.nullable) {
++				wl_log("NULL string received on non-nullable "
++				       "type, message %s(%s)\n", message->name,
++				       message->signature);
++				errno = EINVAL;
++				goto err;
++			}
+ 			if (length == 0) {
+ 				closure->args[i].s = NULL;
+ 				break;
+@@ -842,7 +849,7 @@ wl_connection_demarshal(struct wl_connection *connection,
+ 				goto err;
+ 			}
+ 
+-			wl_buffer_copy(&connection->fds_in, &fd, sizeof fd);
++			ring_buffer_copy(&connection->fds_in, &fd, sizeof fd);
+ 			connection->fds_in.tail += sizeof fd;
+ 			closure->args[i].h = fd;
+ 			break;
+@@ -1049,7 +1056,7 @@ copy_fds_to_connection(struct wl_closure *closure,
+ 		fd = closure->args[i].h;
+ 		if (wl_connection_put_fd(connection, fd)) {
+ 			wl_log("request could not be marshaled: "
+-			       "can't send file descriptor");
++			       "can't send file descriptor\n");
+ 			return -1;
+ 		}
+ 		closure->args[i].h = -1;
+@@ -1256,19 +1263,22 @@ wl_closure_queue(struct wl_closure *closure, struct wl_connection *connection)
+ }
+ 
+ void
+-wl_closure_print(struct wl_closure *closure, struct wl_object *target, int send)
++wl_closure_print(struct wl_closure *closure, struct wl_object *target,
++		 int send, int discarded, uint32_t (*n_parse)(union wl_argument *arg))
+ {
+ 	int i;
+ 	struct argument_details arg;
+ 	const char *signature = closure->message->signature;
+ 	struct timespec tp;
+ 	unsigned int time;
++	uint32_t nval;
+ 
+ 	clock_gettime(CLOCK_REALTIME, &tp);
+ 	time = (tp.tv_sec * 1000000L) + (tp.tv_nsec / 1000);
+ 
+-	fprintf(stderr, "[%10.3f] %s%s@%u.%s(",
+-		time / 1000.0,
++	fprintf(stderr, "[%7u.%03u] %s%s%s@%u.%s(",
++		time / 1000, time % 1000,
++		discarded ? "discarded " : "",
+ 		send ? " -> " : "",
+ 		target->interface->name, target->id,
+ 		closure->message->name);
+@@ -1286,8 +1296,17 @@ wl_closure_print(struct wl_closure *closure, struct wl_object *target, int send)
+ 			fprintf(stderr, "%d", closure->args[i].i);
+ 			break;
+ 		case 'f':
+-			fprintf(stderr, "%f",
+-				wl_fixed_to_double(closure->args[i].f));
++			/* The magic number 390625 is 1e8 / 256 */
++			if (closure->args[i].f >= 0) {
++				fprintf(stderr, "%d.%08d",
++					closure->args[i].f / 256,
++					390625 * (closure->args[i].f % 256));
++			} else {
++
++				fprintf(stderr, "-%d.%08d",
++					closure->args[i].f / -256,
++					-390625 * (closure->args[i].f % 256));
++			}
+ 			break;
+ 		case 's':
+ 			if (closure->args[i].s)
+@@ -1304,17 +1323,22 @@ wl_closure_print(struct wl_closure *closure, struct wl_object *target, int send)
+ 				fprintf(stderr, "nil");
+ 			break;
+ 		case 'n':
++			if (n_parse)
++				nval = n_parse(&closure->args[i]);
++			else
++				nval = closure->args[i].n;
++
+ 			fprintf(stderr, "new id %s@",
+ 				(closure->message->types[i]) ?
+ 				 closure->message->types[i]->name :
+ 				  "[unknown]");
+-			if (closure->args[i].n != 0)
+-				fprintf(stderr, "%u", closure->args[i].n);
++			if (nval != 0)
++				fprintf(stderr, "%u", nval);
+ 			else
+ 				fprintf(stderr, "nil");
+ 			break;
+ 		case 'a':
+-			fprintf(stderr, "array");
++			fprintf(stderr, "array[%zu]", closure->args[i].a->size);
+ 			break;
+ 		case 'h':
+ 			fprintf(stderr, "fd %d", closure->args[i].h);
+diff --git a/third_party/wayland/src/src/dtddata.S b/third_party/wayland/src/src/dtddata.S
+deleted file mode 100644
+index 2405066..0000000
+--- a/third_party/wayland/src/src/dtddata.S
++++ /dev/null
+@@ -1,50 +0,0 @@
+-/*
+- * Copyright � 2015 Collabora, Ltd.
+- *
+- * Permission is hereby granted, free of charge, to any person obtaining
+- * a copy of this software and associated documentation files (the
+- * "Software"), to deal in the Software without restriction, including
+- * without limitation the rights to use, copy, modify, merge, publish,
+- * distribute, sublicense, and/or sell copies of the Software, and to
+- * permit persons to whom the Software is furnished to do so, subject to
+- * the following conditions:
+- *
+- * The above copyright notice and this permission notice (including the
+- * next paragraph) shall be included in all copies or substantial
+- * portions of the Software.
+- *
+- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+- * NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+- * SOFTWARE.
+- */
+-
+-/*
+- * Avoid executable stack.
+- * from: https://wiki.gentoo.org/wiki/Hardened/GNU_stack_quickstart
+- */
+-#if defined(__linux__) && defined(__ELF__)
+-.section .note.GNU-stack,"",%progbits
+-#endif
+-
+-/* from: http://www.linuxjournal.com/content/embedding-file-executable-aka-hello-world-version-5967#comment-348129 */
+-
+-.macro binfile name file
+-	.p2align 2
+-	.globl \name\()_begin
+-\name\()_begin:
+-	.incbin "\file"
+-\name\()_end:
+-	.byte 0
+-	.p2align 2
+-	.globl \name\()_len
+-\name\()_len:
+-	.int (\name\()_end - \name\()_begin)
+-.endm
+-
+-.section .rodata
+-binfile DTD_DATA src/wayland.dtd.embed
+diff --git a/third_party/wayland/src/src/event-loop.c b/third_party/wayland/src/src/event-loop.c
+index 339ff19..c7c98b0 100644
+--- a/third_party/wayland/src/src/event-loop.c
++++ b/third_party/wayland/src/src/event-loop.c
+@@ -340,7 +340,7 @@ wl_timer_heap_reserve(struct wl_timer_heap *timers)
+ 		new_space = timers->space >= 8 ? timers->space * 2 : 8;
+ 		n = realloc(timers->data, (size_t)new_space * sizeof(*n));
+ 		if (!n) {
+-			wl_log("Allocation failure when expanding timer list");
++			wl_log("Allocation failure when expanding timer list\n");
+ 			return -1;
+ 		}
+ 		timers->data = n;
+@@ -361,7 +361,7 @@ wl_timer_heap_unreserve(struct wl_timer_heap *timers)
+ 	if (timers->space >= 16 && timers->space >= 4 * timers->count) {
+ 		n = realloc(timers->data, (size_t)timers->space / 2 * sizeof(*n));
+ 		if (!n) {
+-			wl_log("Reallocation failure when shrinking timer list");
++			wl_log("Reallocation failure when shrinking timer list\n");
+ 			return;
+ 		}
+ 		timers->data = n;
+@@ -942,8 +942,8 @@ post_dispatch_check(struct wl_event_loop *loop)
+ 
+ 		dispatch_result = source->interface->dispatch(source, &ep);
+ 		if (dispatch_result < 0) {
+-			wl_log("Source dispatch function returned negative value!");
+-			wl_log("This would previously accidentally suppress a follow-up dispatch");
++			wl_log("Source dispatch function returned negative value!\n");
++			wl_log("This would previously accidentally suppress a follow-up dispatch\n");
+ 		}
+ 		needs_recheck |= dispatch_result != 0;
+ 	}
+diff --git a/third_party/wayland/src/src/meson.build b/third_party/wayland/src/src/meson.build
+index d91c503..ae8f387 100644
+--- a/third_party/wayland/src/src/meson.build
++++ b/third_party/wayland/src/src/meson.build
+@@ -1,4 +1,3 @@
+-wayland_version = meson.project_version().split('.')
+ wayland_version_h = configuration_data()
+ wayland_version_h.set('WAYLAND_VERSION', meson.project_version())
+ wayland_version_h.set('WAYLAND_VERSION_MAJOR', wayland_version[0].to_int())
+@@ -26,19 +25,31 @@ wayland_util_dep = declare_dependency(
+ if get_option('scanner')
+ 	# wayland-scanner
+ 
+-	configure_file(
++	scanner_deps = [ dependency('expat') ]
++	scanner_args = [ '-include', 'config.h' ]
++
++	if get_option('dtd_validation')
++		scanner_deps += dependency('libxml-2.0')
++		scanner_args += '-DHAVE_LIBXML=1'
++	endif
++
++	prog_embed = find_program('embed.py', native: true)
++
++	embed_dtd = custom_target(
++		'wayland.dtd.h',
+ 		input: '../protocol/wayland.dtd',
+-		output: 'wayland.dtd.embed',
+-		copy: true
++		output: 'wayland.dtd.h',
++		command: [ prog_embed, '@INPUT@', 'wayland_dtd' ],
++		capture: true
+ 	)
+ 
+-	wayland_scanner_sources = [ 'scanner.c', 'dtddata.S' ]
++	wayland_scanner_sources = [ 'scanner.c', embed_dtd ]
+ 	wayland_scanner_includes = [ root_inc, protocol_inc ]
+ 
+ 	wayland_scanner = executable(
+ 		'wayland-scanner',
+ 		wayland_scanner_sources,
+-		c_args: [ '-include', 'config.h' ],
++		c_args: scanner_args,
+ 		include_directories: wayland_scanner_includes,
+ 		dependencies: [ scanner_deps, wayland_util_dep, ],
+ 		install: true
+@@ -77,7 +88,7 @@ if get_option('libraries')
+ 			'connection.c',
+ 			'wayland-os.c'
+ 		],
+-		dependencies: [ ffi_dep, rt_dep ]
++		dependencies: [ epoll_dep, ffi_dep, rt_dep ]
+ 	)
+ 
+ 	wayland_private_dep = declare_dependency(
+@@ -139,6 +150,15 @@ if get_option('libraries')
+ 		output: 'wayland-protocol.c'
+ 	)
+ 
++	if wayland_version[0] != '1'
++		# The versioning used for the shared libraries assumes that the major
++		# version of Wayland as a whole will increase to 2 if and only if there
++		# is an ABI break, at which point we should probably bump the SONAME of
++		# all libraries to .so.2. For more details see
++		# https://gitlab.freedesktop.org/wayland/wayland/-/merge_requests/177
++		error('We probably need to bump the SONAME of libwayland-server and -client')
++	endif
++
+ 	wayland_server = library(
+ 		'wayland-server',
+ 		sources: [
+@@ -149,8 +169,11 @@ if get_option('libraries')
+ 			'wayland-shm.c',
+ 			'event-loop.c'
+ 		],
+-		version: '0.1.0',
++		# To avoid an unnecessary SONAME bump, wayland 1.x.y produces
++		# libwayland-server.so.0.x.y.
++		version: '.'.join(['0', wayland_version[1], wayland_version[2]]),
+ 		dependencies: [
++			epoll_dep,
+ 			ffi_dep,
+ 			wayland_private_dep,
+ 			wayland_util_dep,
+@@ -165,7 +188,7 @@ if get_option('libraries')
+ 	wayland_server_dep = declare_dependency(
+ 		link_with: wayland_server,
+ 		include_directories: [ root_inc, include_directories('.') ],
+-		dependencies: [ ffi_dep, mathlib_dep, threads_dep ],
++		dependencies: [ epoll_dep, ffi_dep, mathlib_dep, threads_dep ],
+ 		sources: [
+ 			wayland_server_protocol_core_h,
+ 			wayland_server_protocol_h
+@@ -184,6 +207,10 @@ if get_option('libraries')
+ 		]
+ 	)
+ 
++	if meson.version().version_compare('>= 0.54.0')
++		meson.override_dependency('wayland-server', wayland_server_dep)
++	endif
++
+ 	wayland_client = library(
+ 		'wayland-client',
+ 		sources: [
+@@ -192,8 +219,11 @@ if get_option('libraries')
+ 			wayland_protocol_c,
+ 			'wayland-client.c'
+ 		],
+-		version: '0.3.0',
++		# To avoid an unnecessary SONAME bump, wayland 1.x.y produces
++		# libwayland-client.so.0.x.y.
++		version: '.'.join(['0', wayland_version[1], wayland_version[2]]),
+ 		dependencies: [
++			epoll_dep,
+ 			ffi_dep,
+ 			wayland_private_dep,
+ 			wayland_util_dep,
+@@ -225,6 +255,10 @@ if get_option('libraries')
+ 		]
+ 	)
+ 
++	if meson.version().version_compare('>= 0.54.0')
++		meson.override_dependency('wayland-client', wayland_client_dep)
++	endif
++
+ 	install_headers([
+ 		'wayland-util.h',
+ 		'wayland-server.h',
+diff --git a/third_party/wayland/src/src/scanner.c b/third_party/wayland/src/src/scanner.c
+index 36ac905..6a95603 100644
+--- a/third_party/wayland/src/src/scanner.c
++++ b/third_party/wayland/src/src/scanner.c
+@@ -41,9 +41,9 @@
+ #if HAVE_LIBXML
+ #include <libxml/parser.h>
+ 
+-/* Embedded wayland.dtd file, see dtddata.S */
+-extern char DTD_DATA_begin;
+-extern int DTD_DATA_len;
++/* Embedded wayland.dtd file */
++/* static const char wayland_dtd[]; wayland.dtd */
++#include "wayland.dtd.h"
+ #endif
+ 
+ /* Expat must be included after libxml as both want to declare XMLCALL; see
+@@ -112,8 +112,8 @@ is_dtd_valid(FILE *input, const char *filename)
+ 	if (!ctx || !dtdctx)
+ 		abort();
+ 
+-	buffer = xmlParserInputBufferCreateMem(&DTD_DATA_begin,
+-					       DTD_DATA_len,
++	buffer = xmlParserInputBufferCreateMem(wayland_dtd,
++					       sizeof(wayland_dtd),
+ 					       XML_CHAR_ENCODING_UTF8);
+ 	if (!buffer) {
+ 		fprintf(stderr, "Failed to init buffer for DTD.\n");
+@@ -236,6 +236,7 @@ struct entry {
+ 	char *summary;
+ 	int since;
+ 	struct wl_list link;
++	struct description *description;
+ };
+ 
+ struct parse_context {
+@@ -245,6 +246,7 @@ struct parse_context {
+ 	struct interface *interface;
+ 	struct message *message;
+ 	struct enumeration *enumeration;
++	struct entry *entry;
+ 	struct description *description;
+ 	char character_data[8192];
+ 	unsigned int character_data_length;
+@@ -542,6 +544,7 @@ free_entry(struct entry *entry)
+ 	free(entry->uppercase_name);
+ 	free(entry->value);
+ 	free(entry->summary);
++	free_description(entry->description);
+ 
+ 	free(entry);
+ }
+@@ -884,6 +887,7 @@ start_element(void *data, const char *element_name, const char **atts)
+ 			entry->summary = NULL;
+ 		wl_list_insert(ctx->enumeration->entry_list.prev,
+ 			       &entry->link);
++		ctx->entry = entry;
+ 	} else if (strcmp(element_name, "description") == 0) {
+ 		if (summary == NULL)
+ 			fail(&ctx->loc, "description without summary");
+@@ -893,6 +897,8 @@ start_element(void *data, const char *element_name, const char **atts)
+ 
+ 		if (ctx->message)
+ 			ctx->message->description = description;
++		else if (ctx->entry)
++			ctx->entry->description = description;
+ 		else if (ctx->enumeration)
+ 			ctx->enumeration->description = description;
+ 		else if (ctx->interface)
+@@ -1008,6 +1014,8 @@ end_element(void *data, const XML_Char *name)
+ 			     ctx->enumeration->name);
+ 		}
+ 		ctx->enumeration = NULL;
++	} else if (strcmp(name, "entry") == 0) {
++		ctx->entry = NULL;
+ 	} else if (strcmp(name, "protocol") == 0) {
+ 		struct interface *i;
+ 
+@@ -1230,38 +1238,40 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
+ 
+ 		printf(")\n"
+ 		       "{\n");
+-		if (ret && ret->interface_name == NULL) {
+-			/* an arg has type ="new_id" but interface is not
+-			 * provided, such as in wl_registry.bind */
+-			printf("\tstruct wl_proxy *%s;\n\n"
+-			       "\t%s = wl_proxy_marshal_constructor_versioned("
+-			       "(struct wl_proxy *) %s,\n"
+-			       "\t\t\t %s_%s, interface, version",
+-			       ret->name, ret->name,
+-			       interface->name,
+-			       interface->uppercase_name,
+-			       m->uppercase_name);
+-		} else if (ret) {
+-			/* Normal factory case, an arg has type="new_id" and
+-			 * an interface is provided */
+-			printf("\tstruct wl_proxy *%s;\n\n"
+-			       "\t%s = wl_proxy_marshal_constructor("
+-			       "(struct wl_proxy *) %s,\n"
+-			       "\t\t\t %s_%s, &%s_interface",
+-			       ret->name, ret->name,
+-			       interface->name,
+-			       interface->uppercase_name,
+-			       m->uppercase_name,
+-			       ret->interface_name);
++		printf("\t");
++		if (ret) {
++			printf("struct wl_proxy *%s;\n\n"
++			       "\t%s = ", ret->name, ret->name);
++		}
++		printf("wl_proxy_marshal_flags("
++		       "(struct wl_proxy *) %s,\n"
++		       "\t\t\t %s_%s",
++		       interface->name,
++		       interface->uppercase_name,
++		       m->uppercase_name);
++
++		if (ret) {
++			if (ret->interface_name) {
++				/* Normal factory case, an arg has type="new_id" and
++				 * an interface is provided */
++				printf(", &%s_interface", ret->interface_name);
++			} else {
++				/* an arg has type ="new_id" but interface is not
++				 * provided, such as in wl_registry.bind */
++				printf(", interface");
++			}
+ 		} else {
+ 			/* No args have type="new_id" */
+-			printf("\twl_proxy_marshal((struct wl_proxy *) %s,\n"
+-			       "\t\t\t %s_%s",
+-			       interface->name,
+-			       interface->uppercase_name,
+-			       m->uppercase_name);
++			printf(", NULL");
+ 		}
+ 
++		if (ret && ret->interface_name == NULL)
++			printf(", version");
++		else
++			printf(", wl_proxy_get_version((struct wl_proxy *) %s)",
++			       interface->name);
++		printf(", %s", m->destructor ? "WL_MARSHAL_FLAG_DESTROY" : "0");
++
+ 		wl_list_for_each(a, &m->arg_list, link) {
+ 			if (a->type == NEW_ID) {
+ 				if (a->interface_name == NULL)
+@@ -1273,11 +1283,6 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
+ 		}
+ 		printf(");\n");
+ 
+-		if (m->destructor)
+-			printf("\n\twl_proxy_destroy("
+-			       "(struct wl_proxy *) %s);\n",
+-			       interface->name);
+-
+ 		if (ret && ret->interface_name == NULL)
+ 			printf("\n\treturn (void *) %s;\n", ret->name);
+ 		else if (ret)
+@@ -1364,10 +1369,17 @@ emit_enumerations(struct interface *interface)
+ 		}
+ 		printf("enum %s_%s {\n", interface->name, e->name);
+ 		wl_list_for_each(entry, &e->entry_list, link) {
+-			if (entry->summary || entry->since > 1) {
++			desc = entry->description;
++			if (entry->summary || entry->since > 1 || desc) {
+ 				printf("\t/**\n");
+ 				if (entry->summary)
+ 					printf("\t * %s\n", entry->summary);
++				if (desc) {
++					printf("\t * %s\n", desc->summary);
++					printf("\t *\n");
++					if (desc->text)
++						desc_dump(desc->text, "\t * ");
++				}
+ 				if (entry->since > 1)
+ 					printf("\t * @since %d\n", entry->since);
+ 				printf("\t */\n");
+diff --git a/third_party/wayland/src/src/wayland-client-core.h b/third_party/wayland/src/src/wayland-client-core.h
+index 0cd96e0..ce91a6f 100644
+--- a/third_party/wayland/src/src/wayland-client-core.h
++++ b/third_party/wayland/src/src/wayland-client-core.h
+@@ -119,9 +119,27 @@ struct wl_display;
+  */
+ struct wl_event_queue;
+ 
++/** Destroy proxy after marshalling
++ * @ingroup wl_proxy
++ */
++#define WL_MARSHAL_FLAG_DESTROY (1 << 0)
++
+ void
+ wl_event_queue_destroy(struct wl_event_queue *queue);
+ 
++struct wl_proxy *
++wl_proxy_marshal_flags(struct wl_proxy *proxy, uint32_t opcode,
++		       const struct wl_interface *interface,
++		       uint32_t version,
++		       uint32_t flags, ...);
++
++struct wl_proxy *
++wl_proxy_marshal_array_flags(struct wl_proxy *proxy, uint32_t opcode,
++			     const struct wl_interface *interface,
++			     uint32_t version,
++			     uint32_t flags,
++			     union wl_argument *args);
++
+ void
+ wl_proxy_marshal(struct wl_proxy *p, uint32_t opcode, ...);
+ 
+diff --git a/third_party/wayland/src/src/wayland-client-uninstalled.pc.in b/third_party/wayland/src/src/wayland-client-uninstalled.pc.in
+deleted file mode 100644
+index 6fd0ce6..0000000
+--- a/third_party/wayland/src/src/wayland-client-uninstalled.pc.in
++++ /dev/null
+@@ -1,9 +0,0 @@
+-libdir=@abs_builddir@/.libs
+-includedir=@abs_srcdir@
+-protocoldir=@abs_top_builddir@/protocol
+-
+-Name: Wayland Client
+-Description: Wayland client side library (not installed)
+-Version: @PACKAGE_VERSION@
+-Cflags: -I${includedir} -I${protocoldir}
+-Libs: -L${libdir} -lwayland-client
+diff --git a/third_party/wayland/src/src/wayland-client.c b/third_party/wayland/src/src/wayland-client.c
+index 21d4606..4fd7c90 100644
+--- a/third_party/wayland/src/src/wayland-client.c
++++ b/third_party/wayland/src/src/wayland-client.c
+@@ -514,12 +514,26 @@ proxy_destroy(struct wl_proxy *proxy)
+ 	wl_proxy_unref(proxy);
+ }
+ 
++static void
++wl_proxy_destroy_caller_locks(struct wl_proxy *proxy)
++{
++	if (proxy->flags & WL_PROXY_FLAG_WRAPPER)
++		wl_abort("Tried to destroy wrapper with wl_proxy_destroy()\n");
++
++	proxy_destroy(proxy);
++}
++
+ /** Destroy a proxy object
+  *
+  * \param proxy The proxy to be destroyed
+  *
+  * \c proxy must not be a proxy wrapper.
+  *
++ * \note This function will abort in response to egregious
++ * errors, and will do so with the display lock held. This means
++ * SIGABRT handlers must not perform any actions that would
++ * attempt to take that lock, or a deadlock would occur.
++ *
+  * \memberof wl_proxy
+  */
+ WL_EXPORT void
+@@ -527,11 +541,10 @@ wl_proxy_destroy(struct wl_proxy *proxy)
+ {
+ 	struct wl_display *display = proxy->display;
+ 
+-	if (proxy->flags & WL_PROXY_FLAG_WRAPPER)
+-		wl_abort("Tried to destroy wrapper with wl_proxy_destroy()\n");
+-
+ 	pthread_mutex_lock(&display->mutex);
+-	proxy_destroy(proxy);
++
++	wl_proxy_destroy_caller_locks(proxy);
++
+ 	pthread_mutex_unlock(&display->mutex);
+ }
+ 
+@@ -724,12 +737,94 @@ wl_proxy_marshal_array_constructor_versioned(struct wl_proxy *proxy,
+ 					     union wl_argument *args,
+ 					     const struct wl_interface *interface,
+ 					     uint32_t version)
++{
++	return wl_proxy_marshal_array_flags(proxy, opcode, interface, version, 0, args);
++}
++
++/** Prepare a request to be sent to the compositor
++ *
++ * \param proxy The proxy object
++ * \param opcode Opcode of the request to be sent
++ * \param interface The interface to use for the new proxy
++ * \param version The protocol object version of the new proxy
++ * \param flags Flags that modify marshalling behaviour
++ * \param ... Extra arguments for the given request
++ * \return A new wl_proxy for the new_id argument or NULL on error
++ *
++ * Translates the request given by opcode and the extra arguments into the
++ * wire format and write it to the connection buffer.
++ *
++ * For new-id arguments, this function will allocate a new wl_proxy
++ * and send the ID to the server.  The new wl_proxy will be returned
++ * on success or NULL on error with errno set accordingly.  The newly
++ * created proxy will have the version specified.
++ *
++ * The flag WL_MARSHAL_FLAG_DESTROY may be passed to ensure the proxy
++ * is destroyed atomically with the marshalling in order to prevent
++ * races that can occur if the display lock is dropped between the
++ * marshal and destroy operations.
++ *
++ * \note This should not normally be used by non-generated code.
++ *
++ * \memberof wl_proxy
++ */
++WL_EXPORT struct wl_proxy *
++wl_proxy_marshal_flags(struct wl_proxy *proxy, uint32_t opcode,
++		       const struct wl_interface *interface, uint32_t version,
++		       uint32_t flags, ...)
++{
++	union wl_argument args[WL_CLOSURE_MAX_ARGS];
++	va_list ap;
++
++	va_start(ap, flags);
++	wl_argument_from_va_list(proxy->object.interface->methods[opcode].signature,
++				 args, WL_CLOSURE_MAX_ARGS, ap);
++	va_end(ap);
++
++	return wl_proxy_marshal_array_flags(proxy, opcode, interface, version, flags, args);
++}
++
++/** Prepare a request to be sent to the compositor
++ *
++ * \param proxy The proxy object
++ * \param opcode Opcode of the request to be sent
++ * \param interface The interface to use for the new proxy
++ * \param version The protocol object version for the new proxy
++ * \param flags Flags that modify marshalling behaviour
++ * \param args Extra arguments for the given request
++ *
++ * Translates the request given by opcode and the extra arguments into the
++ * wire format and write it to the connection buffer.  This version takes an
++ * array of the union type wl_argument.
++ *
++ * For new-id arguments, this function will allocate a new wl_proxy
++ * and send the ID to the server.  The new wl_proxy will be returned
++ * on success or NULL on error with errno set accordingly.  The newly
++ * created proxy will have the version specified.
++ *
++ * The flag WL_MARSHAL_FLAG_DESTROY may be passed to ensure the proxy
++ * is destroyed atomically with the marshalling in order to prevent
++ * races that can occur if the display lock is dropped between the
++ * marshal and destroy operations.
++ *
++ * \note This is intended to be used by language bindings and not in
++ * non-generated code.
++ *
++ * \sa wl_proxy_marshal_flags()
++ *
++ * \memberof wl_proxy
++ */
++WL_EXPORT struct wl_proxy *
++wl_proxy_marshal_array_flags(struct wl_proxy *proxy, uint32_t opcode,
++			     const struct wl_interface *interface, uint32_t version,
++			     uint32_t flags, union wl_argument *args)
+ {
+ 	struct wl_closure *closure;
+ 	struct wl_proxy *new_proxy = NULL;
+ 	const struct wl_message *message;
++	struct wl_display *disp = proxy->display;
+ 
+-	pthread_mutex_lock(&proxy->display->mutex);
++	pthread_mutex_lock(&disp->mutex);
+ 
+ 	message = &proxy->object.interface->methods[opcode];
+ 	if (interface) {
+@@ -752,7 +847,7 @@ wl_proxy_marshal_array_constructor_versioned(struct wl_proxy *proxy,
+ 	}
+ 
+ 	if (debug_client)
+-		wl_closure_print(closure, &proxy->object, true);
++		wl_closure_print(closure, &proxy->object, true, false, NULL);
+ 
+ 	if (wl_closure_send(closure, proxy->display->connection)) {
+ 		wl_log("Error sending request: %s\n", strerror(errno));
+@@ -762,7 +857,10 @@ wl_proxy_marshal_array_constructor_versioned(struct wl_proxy *proxy,
+ 	wl_closure_destroy(closure);
+ 
+  err_unlock:
+-	pthread_mutex_unlock(&proxy->display->mutex);
++	if (flags & WL_MARSHAL_FLAG_DESTROY)
++		wl_proxy_destroy_caller_locks(proxy);
++
++	pthread_mutex_unlock(&disp->mutex);
+ 
+ 	return new_proxy;
+ }
+@@ -1148,7 +1246,9 @@ wl_display_connect(const char *name)
+ 		errno = prev_errno;
+ 
+ 		flags = fcntl(fd, F_GETFD);
+-		if (flags != -1)
++		if (flags == -1 && errno == EBADF)
++			return NULL;
++		else if (flags != -1)
+ 			fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+ 		unsetenv("WAYLAND_SOCKET");
+ 	} else {
+@@ -1358,6 +1458,9 @@ queue_event(struct wl_display *display, int len)
+ 	struct wl_closure *closure;
+ 	const struct wl_message *message;
+ 	struct wl_event_queue *queue;
++	struct timespec tp;
++	unsigned int time;
++	int num_zombie_fds;
+ 
+ 	wl_connection_copy(display->connection, p, sizeof p);
+ 	id = p[0];
+@@ -1371,10 +1474,23 @@ queue_event(struct wl_display *display, int len)
+ 	proxy = wl_map_lookup(&display->objects, id);
+ 	if (!proxy || wl_object_is_zombie(&display->objects, id)) {
+ 		struct wl_zombie *zombie = wl_map_lookup(&display->objects, id);
+-
+-		if (zombie && zombie->fd_count[opcode])
++		num_zombie_fds = (zombie && opcode < zombie->event_count) ?
++			zombie->fd_count[opcode] : 0;
++
++		if (debug_client) {
++			clock_gettime(CLOCK_REALTIME, &tp);
++			time = (tp.tv_sec * 1000000L) + (tp.tv_nsec / 1000);
++
++			fprintf(stderr, "[%7u.%03u] discarded [%s]@%d.[event %d]"
++				"(%d fd, %d byte)\n",
++				time / 1000, time % 1000,
++				zombie ? "zombie" : "unknown",
++				id, opcode,
++				num_zombie_fds, size);
++		}
++		if (num_zombie_fds > 0)
+ 			wl_connection_close_fds_in(display->connection,
+-						   zombie->fd_count[opcode]);
++						   num_zombie_fds);
+ 
+ 		wl_connection_consume(display->connection, size);
+ 		return size;
+@@ -1415,6 +1531,19 @@ queue_event(struct wl_display *display, int len)
+ 	return size;
+ }
+ 
++static uint32_t
++id_from_object(union wl_argument *arg)
++{
++	struct wl_proxy *proxy;
++
++	if (arg->o) {
++		proxy = (struct wl_proxy *)arg->o;
++		return proxy->object.id;
++	}
++
++	return 0;
++}
++
+ static void
+ dispatch_event(struct wl_display *display, struct wl_event_queue *queue)
+ {
+@@ -1433,6 +1562,8 @@ dispatch_event(struct wl_display *display, struct wl_event_queue *queue)
+ 	proxy = closure->proxy;
+ 	proxy_destroyed = !!(proxy->flags & WL_PROXY_FLAG_DESTROYED);
+ 	if (proxy_destroyed) {
++		if (debug_client)
++			wl_closure_print(closure, &proxy->object, false, true, id_from_object);
+ 		destroy_queued_closure(closure);
+ 		return;
+ 	}
+@@ -1441,13 +1572,13 @@ dispatch_event(struct wl_display *display, struct wl_event_queue *queue)
+ 
+ 	if (proxy->dispatcher) {
+ 		if (debug_client)
+-			wl_closure_print(closure, &proxy->object, false);
++			wl_closure_print(closure, &proxy->object, false, false, id_from_object);
+ 
+ 		wl_closure_dispatch(closure, proxy->dispatcher,
+ 				    &proxy->object, opcode);
+ 	} else if (proxy->object.implementation) {
+ 		if (debug_client)
+-			wl_closure_print(closure, &proxy->object, false);
++			wl_closure_print(closure, &proxy->object, false, false, id_from_object);
+ 
+ 		wl_closure_invoke(closure, WL_CLOSURE_INVOKE_CLIENT,
+ 				  &proxy->object, opcode, proxy->user_data);
+@@ -2177,10 +2308,12 @@ wl_proxy_get_class(struct wl_proxy *proxy)
+ WL_EXPORT void
+ wl_proxy_set_queue(struct wl_proxy *proxy, struct wl_event_queue *queue)
+ {
+-	if (queue)
++	if (queue) {
++		assert(proxy->display == queue->display);
+ 		proxy->queue = queue;
+-	else
++	} else {
+ 		proxy->queue = &proxy->display->default_queue;
++	}
+ }
+ 
+ /** Create a proxy wrapper for making queue assignments thread-safe
+diff --git a/third_party/wayland/src/src/wayland-client.pc.in b/third_party/wayland/src/src/wayland-client.pc.in
+deleted file mode 100644
+index eef61da..0000000
+--- a/third_party/wayland/src/src/wayland-client.pc.in
++++ /dev/null
+@@ -1,12 +0,0 @@
+-prefix=@prefix@
+-exec_prefix=@exec_prefix@
+-datarootdir=@datarootdir@
+-pkgdatadir=@datadir@/@PACKAGE@
+-libdir=@libdir@
+-includedir=@includedir@
+-
+-Name: Wayland Client
+-Description: Wayland client side library
+-Version: @WAYLAND_VERSION@
+-Cflags: -I${includedir}
+-Libs: -L${libdir} -lwayland-client
+diff --git a/third_party/wayland/src/src/wayland-os.c b/third_party/wayland/src/src/wayland-os.c
+index 93b6f5f..27c6035 100644
+--- a/third_party/wayland/src/src/wayland-os.c
++++ b/third_party/wayland/src/src/wayland-os.c
+@@ -25,14 +25,21 @@
+ 
+ #define _GNU_SOURCE
+ 
++#include "../config.h"
++
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <unistd.h>
+ #include <fcntl.h>
+ #include <errno.h>
++#include <string.h>
+ #include <sys/epoll.h>
++#include <sys/mman.h>
++#include <sys/un.h>
++#ifdef HAVE_SYS_UCRED_H
++#include <sys/ucred.h>
++#endif
+ 
+-#include "../config.h"
+ #include "wayland-os.h"
+ 
+ static int
+@@ -72,8 +79,48 @@ wl_os_socket_cloexec(int domain, int type, int protocol)
+ 	return set_cloexec_or_close(fd);
+ }
+ 
++#if defined(__FreeBSD__)
+ int
+-wl_os_dupfd_cloexec(int fd, long minfd)
++wl_os_socket_peercred(int sockfd, uid_t *uid, gid_t *gid, pid_t *pid)
++{
++	socklen_t len;
++	struct xucred ucred;
++
++	len = sizeof(ucred);
++	if (getsockopt(sockfd, SOL_LOCAL, LOCAL_PEERCRED, &ucred, &len) < 0 ||
++	    ucred.cr_version != XUCRED_VERSION)
++		return -1;
++	*uid = ucred.cr_uid;
++	*gid = ucred.cr_gid;
++#if HAVE_XUCRED_CR_PID
++	/* Since https://cgit.freebsd.org/src/commit/?id=c5afec6e895a */
++	*pid = ucred.cr_pid;
++#else
++	*pid = 0;
++#endif
++	return 0;
++}
++#elif defined(SO_PEERCRED)
++int
++wl_os_socket_peercred(int sockfd, uid_t *uid, gid_t *gid, pid_t *pid)
++{
++	socklen_t len;
++	struct ucred ucred;
++
++	len = sizeof(ucred);
++	if (getsockopt(sockfd, SOL_SOCKET, SO_PEERCRED, &ucred, &len) < 0)
++		return -1;
++	*uid = ucred.uid;
++	*gid = ucred.gid;
++	*pid = ucred.pid;
++	return 0;
++}
++#else
++#error "Don't know how to read ucred on this platform"
++#endif
++
++int
++wl_os_dupfd_cloexec(int fd, int minfd)
+ {
+ 	int newfd;
+ 
+@@ -121,6 +168,15 @@ recvmsg_cloexec_fallback(int sockfd, struct msghdr *msg, int flags)
+ ssize_t
+ wl_os_recvmsg_cloexec(int sockfd, struct msghdr *msg, int flags)
+ {
++#if HAVE_BROKEN_MSG_CMSG_CLOEXEC
++	/*
++	 * FreeBSD had a broken implementation of MSG_CMSG_CLOEXEC between 2015
++	 * and 2021, so we have to use the non-MSG_CMSG_CLOEXEC fallback
++	 * directly when compiling against a version that does not include the
++	 * fix (https://cgit.freebsd.org/src/commit/?id=6ceacebdf52211).
++	 */
++#pragma message("Using fallback directly since MSG_CMSG_CLOEXEC is broken.")
++#else
+ 	ssize_t len;
+ 
+ 	len = recvmsg(sockfd, msg, flags | MSG_CMSG_CLOEXEC);
+@@ -128,7 +184,7 @@ wl_os_recvmsg_cloexec(int sockfd, struct msghdr *msg, int flags)
+ 		return len;
+ 	if (errno != EINVAL)
+ 		return -1;
+-
++#endif
+ 	return recvmsg_cloexec_fallback(sockfd, msg, flags);
+ }
+ 
+@@ -165,3 +221,31 @@ wl_os_accept_cloexec(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+ 	fd = accept(sockfd, addr, addrlen);
+ 	return set_cloexec_or_close(fd);
+ }
++
++/*
++ * Fallback function for operating systems that don't implement
++ * mremap(MREMAP_MAYMOVE).
++ */
++void *
++wl_os_mremap_maymove(int fd, void *old_data, ssize_t *old_size,
++		     ssize_t new_size, int prot, int flags)
++{
++	void *result;
++	/*
++	 * We could try mapping a new block immediately after the current one
++	 * with MAP_FIXED, however that is not guaranteed to work and breaks
++	 * on CHERI-enabled architectures since the data pointer will still
++	 * have the bounds of the previous allocation. As this is not a
++	 * performance-critical path, we always map a new region and copy the
++	 * old data to the new region.
++	 */
++	result = mmap(NULL, new_size, prot, flags, fd, 0);
++	if (result != MAP_FAILED) {
++		/* Copy the data over and unmap the old mapping. */
++		memcpy(result, old_data, *old_size);
++		if (munmap(old_data, *old_size) == 0) {
++			*old_size = 0; /* successfully unmapped old data. */
++		}
++	}
++	return result;
++}
+diff --git a/third_party/wayland/src/src/wayland-os.h b/third_party/wayland/src/src/wayland-os.h
+index f51efaa..068fd2f 100644
+--- a/third_party/wayland/src/src/wayland-os.h
++++ b/third_party/wayland/src/src/wayland-os.h
+@@ -26,11 +26,17 @@
+ #ifndef WAYLAND_OS_H
+ #define WAYLAND_OS_H
+ 
++#include <sys/types.h>
++#include <sys/socket.h>
++
+ int
+ wl_os_socket_cloexec(int domain, int type, int protocol);
+ 
+ int
+-wl_os_dupfd_cloexec(int fd, long minfd);
++wl_os_socket_peercred(int sockfd, uid_t *uid, gid_t *gid, pid_t *pid);
++
++int
++wl_os_dupfd_cloexec(int fd, int minfd);
+ 
+ ssize_t
+ wl_os_recvmsg_cloexec(int sockfd, struct msghdr *msg, int flags);
+@@ -41,6 +47,10 @@ wl_os_epoll_create_cloexec(void);
+ int
+ wl_os_accept_cloexec(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+ 
++void *
++wl_os_mremap_maymove(int fd, void *old_data, ssize_t *old_size,
++		     ssize_t new_size, int prot, int flags);
++
+ 
+ /*
+  * The following are for wayland-os.c and the unit tests.
+diff --git a/third_party/wayland/src/src/wayland-private.h b/third_party/wayland/src/src/wayland-private.h
+index 9bf8cb7..210451e 100644
+--- a/third_party/wayland/src/src/wayland-private.h
++++ b/third_party/wayland/src/src/wayland-private.h
+@@ -211,7 +211,8 @@ wl_closure_queue(struct wl_closure *closure, struct wl_connection *connection);
+ 
+ void
+ wl_closure_print(struct wl_closure *closure,
+-		 struct wl_object *target, int send);
++		 struct wl_object *target, int send, int discarded,
++		 uint32_t (*n_parse)(union wl_argument *arg));
+ 
+ void
+ wl_closure_destroy(struct wl_closure *closure);
+diff --git a/third_party/wayland/src/src/wayland-scanner-uninstalled.pc.in b/third_party/wayland/src/src/wayland-scanner-uninstalled.pc.in
+deleted file mode 100644
+index 4559799..0000000
+--- a/third_party/wayland/src/src/wayland-scanner-uninstalled.pc.in
++++ /dev/null
+@@ -1,6 +0,0 @@
+-pkgdatadir=@abs_top_srcdir@
+-wayland_scanner=@abs_top_builddir@/wayland-scanner
+-
+-Name: Wayland Scanner
+-Description: Wayland scanner (not installed)
+-Version: @PACKAGE_VERSION@
+diff --git a/third_party/wayland/src/src/wayland-scanner.pc.in b/third_party/wayland/src/src/wayland-scanner.pc.in
+deleted file mode 100644
+index 7b2a4c9..0000000
+--- a/third_party/wayland/src/src/wayland-scanner.pc.in
++++ /dev/null
+@@ -1,9 +0,0 @@
+-prefix=@prefix@
+-exec_prefix=@exec_prefix@
+-datarootdir=@datarootdir@
+-pkgdatadir=@datadir@/@PACKAGE@
+-wayland_scanner=@bindir@/wayland-scanner
+-
+-Name: Wayland Scanner
+-Description: Wayland scanner
+-Version: @WAYLAND_VERSION@
+diff --git a/third_party/wayland/src/src/wayland-server-core.h b/third_party/wayland/src/src/wayland-server-core.h
+index 64d7169..cbc70c0 100644
+--- a/third_party/wayland/src/src/wayland-server-core.h
++++ b/third_party/wayland/src/src/wayland-server-core.h
+@@ -279,6 +279,9 @@ wl_display_set_global_filter(struct wl_display *display,
+ const struct wl_interface *
+ wl_global_get_interface(const struct wl_global *global);
+ 
++struct wl_display *
++wl_global_get_display(const struct wl_global *global);
++
+ void *
+ wl_global_get_user_data(const struct wl_global *global);
+ 
+diff --git a/third_party/wayland/src/src/wayland-server-uninstalled.pc.in b/third_party/wayland/src/src/wayland-server-uninstalled.pc.in
+deleted file mode 100644
+index 6b6e603..0000000
+--- a/third_party/wayland/src/src/wayland-server-uninstalled.pc.in
++++ /dev/null
+@@ -1,9 +0,0 @@
+-libdir=@abs_builddir@/.libs
+-includedir=@abs_srcdir@
+-protocoldir=@abs_top_builddir@/protocol
+-
+-Name: Wayland Server
+-Description: Server side implementation of the Wayland protocol (not installed)
+-Version: @PACKAGE_VERSION@
+-Cflags: -I${includedir} -I${protocoldir}
+-Libs: -L${libdir} -lwayland-server
+diff --git a/third_party/wayland/src/src/wayland-server.c b/third_party/wayland/src/src/wayland-server.c
+index d83bdec..02f1365 100644
+--- a/third_party/wayland/src/src/wayland-server.c
++++ b/third_party/wayland/src/src/wayland-server.c
+@@ -31,7 +31,6 @@
+ #include <stddef.h>
+ #include <stdio.h>
+ #include <stdarg.h>
+-#include <stdbool.h>
+ #include <errno.h>
+ #include <string.h>
+ #include <unistd.h>
+@@ -41,6 +40,7 @@
+ #include <assert.h>
+ #include <sys/time.h>
+ #include <fcntl.h>
++#include <sys/eventfd.h>
+ #include <sys/file.h>
+ #include <sys/stat.h>
+ 
+@@ -79,7 +79,9 @@ struct wl_client {
+ 	struct wl_list link;
+ 	struct wl_map objects;
+ 	struct wl_priv_signal destroy_signal;
+-	struct ucred ucred;
++	pid_t pid;
++	uid_t uid;
++	gid_t gid;
+ 	int error;
+ 	struct wl_priv_signal resource_created_signal;
+ };
+@@ -104,6 +106,9 @@ struct wl_display {
+ 
+ 	wl_display_global_filter_func_t global_filter;
+ 	void *global_filter_data;
++
++	int terminate_efd;
++	struct wl_event_source *term_source;
+ };
+ 
+ struct wl_global {
+@@ -151,7 +156,7 @@ log_closure(struct wl_resource *resource,
+ 	struct wl_protocol_logger_message message;
+ 
+ 	if (debug_server)
+-		wl_closure_print(closure, object, send);
++		wl_closure_print(closure, object, send, false, NULL);
+ 
+ 	if (!wl_list_empty(&display->protocol_loggers)) {
+ 		message.resource = resource;
+@@ -315,7 +320,7 @@ wl_resource_post_error(struct wl_resource *resource,
+ static void
+ destroy_client_with_error(struct wl_client *client, const char *reason)
+ {
+-	wl_log("%s (pid %u)\n", reason, client->ucred.pid);
++	wl_log("%s (pid %u)\n", reason, client->pid);
+ 	wl_client_destroy(client);
+ }
+ 
+@@ -514,7 +519,6 @@ WL_EXPORT struct wl_client *
+ wl_client_create(struct wl_display *display, int fd)
+ {
+ 	struct wl_client *client;
+-	socklen_t len;
+ 
+ 	client = zalloc(sizeof *client);
+ 	if (client == NULL)
+@@ -529,9 +533,8 @@ wl_client_create(struct wl_display *display, int fd)
+ 	if (!client->source)
+ 		goto err_client;
+ 
+-	len = sizeof client->ucred;
+-	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED,
+-		       &client->ucred, &len) < 0)
++	if (wl_os_socket_peercred(fd, &client->uid, &client->gid,
++				  &client->pid) != 0)
+ 		goto err_source;
+ 
+ 	client->connection = wl_connection_create(fd);
+@@ -587,11 +590,11 @@ wl_client_get_credentials(struct wl_client *client,
+ 			  pid_t *pid, uid_t *uid, gid_t *gid)
+ {
+ 	if (pid)
+-		*pid = client->ucred.pid;
++		*pid = client->pid;
+ 	if (uid)
+-		*uid = client->ucred.uid;
++		*uid = client->uid;
+ 	if (gid)
+-		*gid = client->ucred.gid;
++		*gid = client->gid;
+ }
+ 
+ /** Get the file descriptor for the client
+@@ -1031,6 +1034,16 @@ bind_display(struct wl_client *client, struct wl_display *display)
+ 	return 0;
+ }
+ 
++static int
++handle_display_terminate(int fd, uint32_t mask, void *data) {
++	uint64_t term_event;
++
++	if (read(fd, &term_event, sizeof(term_event)) < 0 && errno != EAGAIN)
++		return -1;
++
++	return 0;
++}
++
+ /** Create Wayland display object.
+  *
+  * \return The Wayland display object. Null if failed to create
+@@ -1059,6 +1072,19 @@ wl_display_create(void)
+ 		return NULL;
+ 	}
+ 
++	display->terminate_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
++	if (display->terminate_efd < 0)
++		goto err_eventfd;
++
++	display->term_source = wl_event_loop_add_fd(display->loop,
++						    display->terminate_efd,
++						    WL_EVENT_READABLE,
++						    handle_display_terminate,
++						    NULL);
++
++	if (display->term_source == NULL)
++		goto err_term_source;
++
+ 	wl_list_init(&display->global_list);
+ 	wl_list_init(&display->socket_list);
+ 	wl_list_init(&display->client_list);
+@@ -1077,6 +1103,13 @@ wl_display_create(void)
+ 	wl_array_init(&display->additional_shm_formats);
+ 
+ 	return display;
++
++err_term_source:
++	close(display->terminate_efd);
++err_eventfd:
++	wl_event_loop_destroy(display->loop);
++	free(display);
++	return NULL;
+ }
+ 
+ static void
+@@ -1136,6 +1169,10 @@ wl_display_destroy(struct wl_display *display)
+ 	wl_list_for_each_safe(s, next, &display->socket_list, link) {
+ 		wl_socket_destroy(s);
+ 	}
++
++	close(display->terminate_efd);
++	wl_event_source_remove(display->term_source);
++
+ 	wl_event_loop_destroy(display->loop);
+ 
+ 	wl_list_for_each_safe(global, gnext, &display->global_list, link)
+@@ -1278,6 +1315,20 @@ wl_global_get_interface(const struct wl_global *global)
+ 	return global->interface;
+ }
+ 
++/** Get the display object for the given global
++ *
++ * \param global The global object
++ * \return The display object the global is associated with.
++ *
++ * \memberof wl_global
++ * \since 1.20
++ */
++WL_EXPORT struct wl_display *
++wl_global_get_display(const struct wl_global *global)
++{
++	return global->display;
++}
++
+ WL_EXPORT void *
+ wl_global_get_user_data(const struct wl_global *global)
+ {
+@@ -1338,7 +1389,13 @@ wl_display_get_event_loop(struct wl_display *display)
+ WL_EXPORT void
+ wl_display_terminate(struct wl_display *display)
+ {
++	int ret;
++	uint64_t terminate = 1;
++
+ 	display->run = 0;
++
++	ret = write(display->terminate_efd, &terminate, sizeof(terminate));
++	assert (ret >= 0 || errno == EAGAIN);
+ }
+ 
+ WL_EXPORT void
+@@ -1501,8 +1558,6 @@ wl_socket_init_for_display_name(struct wl_socket *s, const char *name)
+ 	name_size = snprintf(s->addr.sun_path, sizeof s->addr.sun_path,
+ 			     "%s%s%s", runtime_dir, separator, name) + 1;
+ 
+-	s->display_name = (s->addr.sun_path + name_size - 1) - strlen(name);
+-
+ 	assert(name_size > 0);
+ 	if (name_size > (int)sizeof s->addr.sun_path) {
+ 		wl_log("error: socket path \"%s%s%s\" plus null terminator"
+@@ -1514,6 +1569,8 @@ wl_socket_init_for_display_name(struct wl_socket *s, const char *name)
+ 		return -1;
+ 	}
+ 
++	s->display_name = (s->addr.sun_path + name_size - 1) - strlen(name);
++
+ 	return 0;
+ }
+ 
+diff --git a/third_party/wayland/src/src/wayland-server.pc.in b/third_party/wayland/src/src/wayland-server.pc.in
+deleted file mode 100644
+index 50dff53..0000000
+--- a/third_party/wayland/src/src/wayland-server.pc.in
++++ /dev/null
+@@ -1,12 +0,0 @@
+-prefix=@prefix@
+-exec_prefix=@exec_prefix@
+-datarootdir=@datarootdir@
+-pkgdatadir=@datadir@/@PACKAGE@
+-libdir=@libdir@
+-includedir=@includedir@
+-
+-Name: Wayland Server
+-Description: Server side implementation of the Wayland protocol
+-Version: @WAYLAND_VERSION@
+-Cflags: -I${includedir}
+-Libs: -L${libdir} -lwayland-server
+diff --git a/third_party/wayland/src/src/wayland-shm.c b/third_party/wayland/src/src/wayland-shm.c
+index b85e5a7..63ac0d7 100644
+--- a/third_party/wayland/src/src/wayland-shm.c
++++ b/third_party/wayland/src/src/wayland-shm.c
+@@ -38,6 +38,7 @@
+ #include <stdint.h>
+ #include <string.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ #include <assert.h>
+ #include <signal.h>
+@@ -45,6 +46,7 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ 
++#include "wayland-os.h"
+ #include "wayland-util.h"
+ #include "wayland-private.h"
+ #include "wayland-server.h"
+@@ -61,11 +63,24 @@ struct wl_shm_pool {
+ 	int internal_refcount;
+ 	int external_refcount;
+ 	char *data;
+-	int32_t size;
+-	int32_t new_size;
++	ssize_t size;
++	ssize_t new_size;
++	/* The following three fields are needed for mremap() emulation. */
++	int mmap_fd;
++	int mmap_flags;
++	int mmap_prot;
+ 	bool sigbus_is_impossible;
+ };
+ 
++/** \class wl_shm_buffer
++ *
++ * \brief A SHM buffer
++ *
++ * wl_shm_buffer provides a helper for accessing the contents of a wl_buffer
++ * resource created via the wl_shm interface.
++ *
++ * A wl_shm_buffer becomes invalid as soon as its #wl_resource is destroyed.
++ */
+ struct wl_shm_buffer {
+ 	struct wl_resource *resource;
+ 	int32_t width, height;
+@@ -81,6 +96,26 @@ struct wl_shm_sigbus_data {
+ 	int fallback_mapping_used;
+ };
+ 
++static void *
++shm_pool_grow_mapping(struct wl_shm_pool *pool)
++{
++	void *data;
++
++#ifdef MREMAP_MAYMOVE
++	data = mremap(pool->data, pool->size, pool->new_size, MREMAP_MAYMOVE);
++#else
++	data = wl_os_mremap_maymove(pool->mmap_fd, pool->data, &pool->size,
++				    pool->new_size, pool->mmap_prot,
++				    pool->mmap_flags);
++	if (pool->size != 0) {
++		wl_resource_post_error(pool->resource,
++				       WL_SHM_ERROR_INVALID_FD,
++				       "leaked old mapping");
++	}
++#endif
++	return data;
++}
++
+ static void
+ shm_pool_finish_resize(struct wl_shm_pool *pool)
+ {
+@@ -89,7 +124,7 @@ shm_pool_finish_resize(struct wl_shm_pool *pool)
+ 	if (pool->size == pool->new_size)
+ 		return;
+ 
+-	data = mremap(pool->data, pool->size, pool->new_size, MREMAP_MAYMOVE);
++	data = shm_pool_grow_mapping(pool);
+ 	if (data == MAP_FAILED) {
+ 		wl_resource_post_error(pool->resource,
+ 				       WL_SHM_ERROR_INVALID_FD,
+@@ -106,16 +141,19 @@ shm_pool_unref(struct wl_shm_pool *pool, bool external)
+ {
+ 	if (external) {
+ 		pool->external_refcount--;
++		assert(pool->external_refcount >= 0);
+ 		if (pool->external_refcount == 0)
+ 			shm_pool_finish_resize(pool);
+ 	} else {
+ 		pool->internal_refcount--;
++		assert(pool->internal_refcount >= 0);
+ 	}
+ 
+-	if (pool->internal_refcount + pool->external_refcount)
++	if (pool->internal_refcount + pool->external_refcount > 0)
+ 		return;
+ 
+ 	munmap(pool->data, pool->size);
++	close(pool->mmap_fd);
+ 	free(pool);
+ }
+ 
+@@ -124,8 +162,7 @@ destroy_buffer(struct wl_resource *resource)
+ {
+ 	struct wl_shm_buffer *buffer = wl_resource_get_user_data(resource);
+ 
+-	if (buffer->pool)
+-		shm_pool_unref(buffer->pool, false);
++	shm_pool_unref(buffer->pool, false);
+ 	free(buffer);
+ }
+ 
+@@ -177,7 +214,7 @@ shm_pool_create_buffer(struct wl_client *client, struct wl_resource *resource,
+ 	}
+ 
+ 	if (offset < 0 || width <= 0 || height <= 0 || stride < width ||
+-	    INT32_MAX / stride <= height ||
++	    INT32_MAX / stride < height ||
+ 	    offset > pool->size - stride * height) {
+ 		wl_resource_post_error(resource,
+ 				       WL_SHM_ERROR_INVALID_STRIDE,
+@@ -263,7 +300,10 @@ shm_create_pool(struct wl_client *client, struct wl_resource *resource,
+ 		uint32_t id, int fd, int32_t size)
+ {
+ 	struct wl_shm_pool *pool;
++	struct stat statbuf;
+ 	int seals;
++	int prot;
++	int flags;
+ 
+ 	if (size <= 0) {
+ 		wl_resource_post_error(resource,
+@@ -282,7 +322,11 @@ shm_create_pool(struct wl_client *client, struct wl_resource *resource,
+ 	seals = fcntl(fd, F_GET_SEALS);
+ 	if (seals == -1)
+ 		seals = 0;
+-	pool->sigbus_is_impossible = (seals & F_SEAL_SHRINK) ? true : false;
++
++	if ((seals & F_SEAL_SHRINK) && fstat(fd, &statbuf) >= 0)
++		pool->sigbus_is_impossible = statbuf.st_size >= size;
++	else
++		pool->sigbus_is_impossible = false;
+ #else
+ 	pool->sigbus_is_impossible = false;
+ #endif
+@@ -291,17 +335,19 @@ shm_create_pool(struct wl_client *client, struct wl_resource *resource,
+ 	pool->external_refcount = 0;
+ 	pool->size = size;
+ 	pool->new_size = size;
+-	pool->data = mmap(NULL, size,
+-			  PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++	prot = PROT_READ | PROT_WRITE;
++	flags = MAP_SHARED;
++	pool->data = mmap(NULL, size, prot, flags, fd, 0);
+ 	if (pool->data == MAP_FAILED) {
+-		wl_resource_post_error(resource,
+-				       WL_SHM_ERROR_INVALID_FD,
++		wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD,
+ 				       "failed mmap fd %d: %s", fd,
+ 				       strerror(errno));
+ 		goto err_free;
+ 	}
+-	close(fd);
+-
++	/* We may need to keep the fd, prot and flags to emulate mremap(). */
++	pool->mmap_fd = fd;
++	pool->mmap_prot = prot;
++	pool->mmap_flags = flags;
+ 	pool->resource =
+ 		wl_resource_create(client, &wl_shm_pool_interface, 1, id);
+ 	if (!pool->resource) {
+@@ -400,11 +446,6 @@ wl_shm_buffer_get_stride(struct wl_shm_buffer *buffer)
+ WL_EXPORT void *
+ wl_shm_buffer_get_data(struct wl_shm_buffer *buffer)
+ {
+-	assert(buffer->pool);
+-
+-	if (!buffer->pool)
+-		return NULL;
+-
+ 	if (buffer->pool->external_refcount &&
+ 	    (buffer->pool->size != buffer->pool->new_size))
+ 		wl_log("Buffer address requested when its parent pool "
+@@ -511,10 +552,8 @@ sigbus_handler(int signum, siginfo_t *info, void *context)
+ 	sigbus_data->fallback_mapping_used = 1;
+ 
+ 	/* This should replace the previous mapping */
+-	if (mmap(pool->data, pool->size,
+-		 PROT_READ | PROT_WRITE,
+-		 MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
+-		 0, 0) == (void *) -1) {
++	if (mmap(pool->data, pool->size, PROT_READ | PROT_WRITE,
++		 MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, 0, 0) == MAP_FAILED) {
+ 		reraise_sigbus();
+ 		return;
+ 	}
+diff --git a/third_party/wayland/src/src/wayland-util.c b/third_party/wayland/src/src/wayland-util.c
+index d5973bf..c89a67b 100644
+--- a/third_party/wayland/src/src/wayland-util.c
++++ b/third_party/wayland/src/src/wayland-util.c
+@@ -147,7 +147,9 @@ wl_array_copy(struct wl_array *array, struct wl_array *source)
+ 		array->size = source->size;
+ 	}
+ 
+-	memcpy(array->data, source->data, source->size);
++	if (source->size > 0)
++		memcpy(array->data, source->data, source->size);
++
+ 	return 0;
+ }
+ 
+@@ -361,18 +363,21 @@ wl_map_lookup_flags(struct wl_map *map, uint32_t i)
+ static enum wl_iterator_result
+ for_each_helper(struct wl_array *entries, wl_iterator_func_t func, void *data)
+ {
+-	union map_entry *start, *end, *p;
+ 	enum wl_iterator_result ret = WL_ITERATOR_CONTINUE;
++	union map_entry entry, *start;
++	size_t count;
+ 
+-	start = entries->data;
+-	end = (union map_entry *) ((char *) entries->data + entries->size);
++	start = (union map_entry *) entries->data;
++	count = entries->size / sizeof(union map_entry);
+ 
+-	for (p = start; p < end; p++)
+-		if (p->data && !map_entry_is_free(*p)) {
+-			ret = func(map_entry_get_data(*p), data, map_entry_get_flags(*p));
++	for (size_t idx = 0; idx < count; idx++) {
++		entry = start[idx];
++		if (entry.data && !map_entry_is_free(entry)) {
++			ret = func(map_entry_get_data(entry), data, map_entry_get_flags(entry));
+ 			if (ret != WL_ITERATOR_CONTINUE)
+ 				break;
+ 		}
++	}
+ 
+ 	return ret;
+ }
+diff --git a/third_party/wayland/src/tests/connection-test.c b/third_party/wayland/src/tests/connection-test.c
+index c04845b..eea9287 100644
+--- a/third_party/wayland/src/tests/connection-test.c
++++ b/third_party/wayland/src/tests/connection-test.c
+@@ -394,7 +394,7 @@ demarshal(struct marshal_data *data, const char *format,
+ 	struct wl_closure *closure;
+ 	struct wl_map objects;
+ 	struct wl_object object = { NULL, &func, 0 };
+-	int size = msg[1];
++	int size = msg[1] >> 16;
+ 
+ 	assert(write(data->s[1], msg, size) == size);
+ 	assert(wl_connection_read(data->read_connection) == size);
+@@ -417,39 +417,41 @@ TEST(connection_demarshal)
+ 
+ 	data.value.u = 8000;
+ 	msg[0] = 400200;	/* object id */
+-	msg[1] = 12;		/* size = 12, opcode = 0 */
++	msg[1] = 12 << 16;		/* size = 12, opcode = 0 */
+ 	msg[2] = data.value.u;
+ 	demarshal(&data, "u", msg, (void *) validate_demarshal_u);
+ 
+ 	data.value.i = -557799;
+ 	msg[0] = 400200;
+-	msg[1] = 12;
++	msg[1] = 12 << 16;
+ 	msg[2] = data.value.i;
+ 	demarshal(&data, "i", msg, (void *) validate_demarshal_i);
+ 
+ 	data.value.s = "superdude";
+ 	msg[0] = 400200;
+-	msg[1] = 24;
++	msg[1] = 24 << 16;
+ 	msg[2] = 10;
++	msg[3 + msg[2]/4] = 0;
+ 	memcpy(&msg[3], data.value.s, msg[2]);
+ 	demarshal(&data, "s", msg, (void *) validate_demarshal_s);
+ 
+ 	data.value.s = "superdude";
+ 	msg[0] = 400200;
+-	msg[1] = 24;
++	msg[1] = 24 << 16;
+ 	msg[2] = 10;
++	msg[3 + msg[2]/4] = 0;
+ 	memcpy(&msg[3], data.value.s, msg[2]);
+ 	demarshal(&data, "?s", msg, (void *) validate_demarshal_s);
+ 
+ 	data.value.i = wl_fixed_from_double(-90000.2390);
+ 	msg[0] = 400200;
+-	msg[1] = 12;
++	msg[1] = 12 << 16;
+ 	msg[2] = data.value.i;
+ 	demarshal(&data, "f", msg, (void *) validate_demarshal_f);
+ 
+ 	data.value.s = NULL;
+ 	msg[0] = 400200;
+-	msg[1] = 12;
++	msg[1] = 12 << 16;
+ 	msg[2] = 0;
+ 	demarshal(&data, "?s", msg, (void *) validate_demarshal_s);
+ 
+@@ -553,6 +555,24 @@ expected_fail_demarshal(struct marshal_data *data, const char *format,
+ 	assert(errno == expected_error);
+ }
+ 
++TEST(connection_demarshal_null_strings)
++{
++	struct marshal_data data;
++	uint32_t msg[3];
++
++	setup_marshal_data(&data);
++
++	data.value.s = NULL;
++	msg[0] = 400200;	/* object id */
++	msg[1] = 12 << 16;	/* size = 12, opcode = 0 */
++	msg[2] = 0;		/* string length = 0 */
++	demarshal(&data, "?s", msg, (void *) validate_demarshal_s);
++
++	expected_fail_demarshal(&data, "s", msg, EINVAL);
++
++	release_marshal_data(&data);
++}
++
+ /* These tests are verifying that the demarshaling code will gracefully handle
+  * clients lying about string and array lengths and giving values near
+  * UINT32_MAX. Before fixes f7fdface and f5b9e3b9 this test would crash on
+diff --git a/third_party/wayland/src/tests/data/example-client.h b/third_party/wayland/src/tests/data/example-client.h
+index d421af9..39d799c 100644
+--- a/third_party/wayland/src/tests/data/example-client.h
++++ b/third_party/wayland/src/tests/data/example-client.h
+@@ -1011,8 +1011,8 @@ wl_display_sync(struct wl_display *wl_display)
+ {
+ 	struct wl_proxy *callback;
+ 
+-	callback = wl_proxy_marshal_constructor((struct wl_proxy *) wl_display,
+-			 WL_DISPLAY_SYNC, &wl_callback_interface, NULL);
++	callback = wl_proxy_marshal_flags((struct wl_proxy *) wl_display,
++			 WL_DISPLAY_SYNC, &wl_callback_interface, wl_proxy_get_version((struct wl_proxy *) wl_display), 0, NULL);
+ 
+ 	return (struct wl_callback *) callback;
+ }
+@@ -1029,8 +1029,8 @@ wl_display_get_registry(struct wl_display *wl_display)
+ {
+ 	struct wl_proxy *registry;
+ 
+-	registry = wl_proxy_marshal_constructor((struct wl_proxy *) wl_display,
+-			 WL_DISPLAY_GET_REGISTRY, &wl_registry_interface, NULL);
++	registry = wl_proxy_marshal_flags((struct wl_proxy *) wl_display,
++			 WL_DISPLAY_GET_REGISTRY, &wl_registry_interface, wl_proxy_get_version((struct wl_proxy *) wl_display), 0, NULL);
+ 
+ 	return (struct wl_registry *) registry;
+ }
+@@ -1142,8 +1142,8 @@ wl_registry_bind(struct wl_registry *wl_registry, uint32_t name, const struct wl
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor_versioned((struct wl_proxy *) wl_registry,
+-			 WL_REGISTRY_BIND, interface, version, name, interface->name, version, NULL);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_registry,
++			 WL_REGISTRY_BIND, interface, version, 0, name, interface->name, version, NULL);
+ 
+ 	return (void *) id;
+ }
+@@ -1258,8 +1258,8 @@ wl_compositor_create_surface(struct wl_compositor *wl_compositor)
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_compositor,
+-			 WL_COMPOSITOR_CREATE_SURFACE, &wl_surface_interface, NULL);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_compositor,
++			 WL_COMPOSITOR_CREATE_SURFACE, &wl_surface_interface, wl_proxy_get_version((struct wl_proxy *) wl_compositor), 0, NULL);
+ 
+ 	return (struct wl_surface *) id;
+ }
+@@ -1274,8 +1274,8 @@ wl_compositor_create_region(struct wl_compositor *wl_compositor)
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_compositor,
+-			 WL_COMPOSITOR_CREATE_REGION, &wl_region_interface, NULL);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_compositor,
++			 WL_COMPOSITOR_CREATE_REGION, &wl_region_interface, wl_proxy_get_version((struct wl_proxy *) wl_compositor), 0, NULL);
+ 
+ 	return (struct wl_region *) id;
+ }
+@@ -1338,8 +1338,8 @@ wl_shm_pool_create_buffer(struct wl_shm_pool *wl_shm_pool, int32_t offset, int32
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_shm_pool,
+-			 WL_SHM_POOL_CREATE_BUFFER, &wl_buffer_interface, NULL, offset, width, height, stride, format);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_shm_pool,
++			 WL_SHM_POOL_CREATE_BUFFER, &wl_buffer_interface, wl_proxy_get_version((struct wl_proxy *) wl_shm_pool), 0, NULL, offset, width, height, stride, format);
+ 
+ 	return (struct wl_buffer *) id;
+ }
+@@ -1356,10 +1356,8 @@ wl_shm_pool_create_buffer(struct wl_shm_pool *wl_shm_pool, int32_t offset, int32
+ static inline void
+ wl_shm_pool_destroy(struct wl_shm_pool *wl_shm_pool)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shm_pool,
+-			 WL_SHM_POOL_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_shm_pool);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shm_pool,
++			 WL_SHM_POOL_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shm_pool), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -1373,8 +1371,8 @@ wl_shm_pool_destroy(struct wl_shm_pool *wl_shm_pool)
+ static inline void
+ wl_shm_pool_resize(struct wl_shm_pool *wl_shm_pool, int32_t size)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shm_pool,
+-			 WL_SHM_POOL_RESIZE, size);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shm_pool,
++			 WL_SHM_POOL_RESIZE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shm_pool), 0, size);
+ }
+ 
+ #ifndef WL_SHM_ERROR_ENUM
+@@ -1734,8 +1732,8 @@ wl_shm_create_pool(struct wl_shm *wl_shm, int32_t fd, int32_t size)
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_shm,
+-			 WL_SHM_CREATE_POOL, &wl_shm_pool_interface, NULL, fd, size);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_shm,
++			 WL_SHM_CREATE_POOL, &wl_shm_pool_interface, wl_proxy_get_version((struct wl_proxy *) wl_shm), 0, NULL, fd, size);
+ 
+ 	return (struct wl_shm_pool *) id;
+ }
+@@ -1819,10 +1817,8 @@ wl_buffer_get_version(struct wl_buffer *wl_buffer)
+ static inline void
+ wl_buffer_destroy(struct wl_buffer *wl_buffer)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_buffer,
+-			 WL_BUFFER_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_buffer);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_buffer,
++			 WL_BUFFER_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_buffer), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #ifndef WL_DATA_OFFER_ERROR_ENUM
+@@ -2015,8 +2011,8 @@ wl_data_offer_get_version(struct wl_data_offer *wl_data_offer)
+ static inline void
+ wl_data_offer_accept(struct wl_data_offer *wl_data_offer, uint32_t serial, const char *mime_type)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_offer,
+-			 WL_DATA_OFFER_ACCEPT, serial, mime_type);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_offer,
++			 WL_DATA_OFFER_ACCEPT, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_offer), 0, serial, mime_type);
+ }
+ 
+ /**
+@@ -2041,8 +2037,8 @@ wl_data_offer_accept(struct wl_data_offer *wl_data_offer, uint32_t serial, const
+ static inline void
+ wl_data_offer_receive(struct wl_data_offer *wl_data_offer, const char *mime_type, int32_t fd)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_offer,
+-			 WL_DATA_OFFER_RECEIVE, mime_type, fd);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_offer,
++			 WL_DATA_OFFER_RECEIVE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_offer), 0, mime_type, fd);
+ }
+ 
+ /**
+@@ -2053,10 +2049,8 @@ wl_data_offer_receive(struct wl_data_offer *wl_data_offer, const char *mime_type
+ static inline void
+ wl_data_offer_destroy(struct wl_data_offer *wl_data_offer)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_offer,
+-			 WL_DATA_OFFER_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_data_offer);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_offer,
++			 WL_DATA_OFFER_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_offer), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -2077,8 +2071,8 @@ wl_data_offer_destroy(struct wl_data_offer *wl_data_offer)
+ static inline void
+ wl_data_offer_finish(struct wl_data_offer *wl_data_offer)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_offer,
+-			 WL_DATA_OFFER_FINISH);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_offer,
++			 WL_DATA_OFFER_FINISH, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_offer), 0);
+ }
+ 
+ /**
+@@ -2119,8 +2113,8 @@ wl_data_offer_finish(struct wl_data_offer *wl_data_offer)
+ static inline void
+ wl_data_offer_set_actions(struct wl_data_offer *wl_data_offer, uint32_t dnd_actions, uint32_t preferred_action)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_offer,
+-			 WL_DATA_OFFER_SET_ACTIONS, dnd_actions, preferred_action);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_offer,
++			 WL_DATA_OFFER_SET_ACTIONS, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_offer), 0, dnd_actions, preferred_action);
+ }
+ 
+ #ifndef WL_DATA_SOURCE_ERROR_ENUM
+@@ -2344,8 +2338,8 @@ wl_data_source_get_version(struct wl_data_source *wl_data_source)
+ static inline void
+ wl_data_source_offer(struct wl_data_source *wl_data_source, const char *mime_type)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_source,
+-			 WL_DATA_SOURCE_OFFER, mime_type);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_source,
++			 WL_DATA_SOURCE_OFFER, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_source), 0, mime_type);
+ }
+ 
+ /**
+@@ -2356,10 +2350,8 @@ wl_data_source_offer(struct wl_data_source *wl_data_source, const char *mime_typ
+ static inline void
+ wl_data_source_destroy(struct wl_data_source *wl_data_source)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_source,
+-			 WL_DATA_SOURCE_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_data_source);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_source,
++			 WL_DATA_SOURCE_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_source), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -2382,8 +2374,8 @@ wl_data_source_destroy(struct wl_data_source *wl_data_source)
+ static inline void
+ wl_data_source_set_actions(struct wl_data_source *wl_data_source, uint32_t dnd_actions)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_source,
+-			 WL_DATA_SOURCE_SET_ACTIONS, dnd_actions);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_source,
++			 WL_DATA_SOURCE_SET_ACTIONS, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_source), 0, dnd_actions);
+ }
+ 
+ #ifndef WL_DATA_DEVICE_ERROR_ENUM
+@@ -2614,8 +2606,8 @@ wl_data_device_destroy(struct wl_data_device *wl_data_device)
+ static inline void
+ wl_data_device_start_drag(struct wl_data_device *wl_data_device, struct wl_data_source *source, struct wl_surface *origin, struct wl_surface *icon, uint32_t serial)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_device,
+-			 WL_DATA_DEVICE_START_DRAG, source, origin, icon, serial);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_device,
++			 WL_DATA_DEVICE_START_DRAG, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_device), 0, source, origin, icon, serial);
+ }
+ 
+ /**
+@@ -2629,8 +2621,8 @@ wl_data_device_start_drag(struct wl_data_device *wl_data_device, struct wl_data_
+ static inline void
+ wl_data_device_set_selection(struct wl_data_device *wl_data_device, struct wl_data_source *source, uint32_t serial)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_device,
+-			 WL_DATA_DEVICE_SET_SELECTION, source, serial);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_device,
++			 WL_DATA_DEVICE_SET_SELECTION, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_device), 0, source, serial);
+ }
+ 
+ /**
+@@ -2641,10 +2633,8 @@ wl_data_device_set_selection(struct wl_data_device *wl_data_device, struct wl_da
+ static inline void
+ wl_data_device_release(struct wl_data_device *wl_data_device)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_data_device,
+-			 WL_DATA_DEVICE_RELEASE);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_data_device);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_data_device,
++			 WL_DATA_DEVICE_RELEASE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_data_device), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #ifndef WL_DATA_DEVICE_MANAGER_DND_ACTION_ENUM
+@@ -2747,8 +2737,8 @@ wl_data_device_manager_create_data_source(struct wl_data_device_manager *wl_data
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_data_device_manager,
+-			 WL_DATA_DEVICE_MANAGER_CREATE_DATA_SOURCE, &wl_data_source_interface, NULL);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_data_device_manager,
++			 WL_DATA_DEVICE_MANAGER_CREATE_DATA_SOURCE, &wl_data_source_interface, wl_proxy_get_version((struct wl_proxy *) wl_data_device_manager), 0, NULL);
+ 
+ 	return (struct wl_data_source *) id;
+ }
+@@ -2763,8 +2753,8 @@ wl_data_device_manager_get_data_device(struct wl_data_device_manager *wl_data_de
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_data_device_manager,
+-			 WL_DATA_DEVICE_MANAGER_GET_DATA_DEVICE, &wl_data_device_interface, NULL, seat);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_data_device_manager,
++			 WL_DATA_DEVICE_MANAGER_GET_DATA_DEVICE, &wl_data_device_interface, wl_proxy_get_version((struct wl_proxy *) wl_data_device_manager), 0, NULL, seat);
+ 
+ 	return (struct wl_data_device *) id;
+ }
+@@ -2828,8 +2818,8 @@ wl_shell_get_shell_surface(struct wl_shell *wl_shell, struct wl_surface *surface
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_shell,
+-			 WL_SHELL_GET_SHELL_SURFACE, &wl_shell_surface_interface, NULL, surface);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_shell,
++			 WL_SHELL_GET_SHELL_SURFACE, &wl_shell_surface_interface, wl_proxy_get_version((struct wl_proxy *) wl_shell), 0, NULL, surface);
+ 
+ 	return (struct wl_shell_surface *) id;
+ }
+@@ -3099,8 +3089,8 @@ wl_shell_surface_destroy(struct wl_shell_surface *wl_shell_surface)
+ static inline void
+ wl_shell_surface_pong(struct wl_shell_surface *wl_shell_surface, uint32_t serial)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_PONG, serial);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_PONG, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, serial);
+ }
+ 
+ /**
+@@ -3115,8 +3105,8 @@ wl_shell_surface_pong(struct wl_shell_surface *wl_shell_surface, uint32_t serial
+ static inline void
+ wl_shell_surface_move(struct wl_shell_surface *wl_shell_surface, struct wl_seat *seat, uint32_t serial)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_MOVE, seat, serial);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_MOVE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, seat, serial);
+ }
+ 
+ /**
+@@ -3131,8 +3121,8 @@ wl_shell_surface_move(struct wl_shell_surface *wl_shell_surface, struct wl_seat
+ static inline void
+ wl_shell_surface_resize(struct wl_shell_surface *wl_shell_surface, struct wl_seat *seat, uint32_t serial, uint32_t edges)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_RESIZE, seat, serial, edges);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_RESIZE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, seat, serial, edges);
+ }
+ 
+ /**
+@@ -3145,8 +3135,8 @@ wl_shell_surface_resize(struct wl_shell_surface *wl_shell_surface, struct wl_sea
+ static inline void
+ wl_shell_surface_set_toplevel(struct wl_shell_surface *wl_shell_surface)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_SET_TOPLEVEL);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_SET_TOPLEVEL, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0);
+ }
+ 
+ /**
+@@ -3163,8 +3153,8 @@ wl_shell_surface_set_toplevel(struct wl_shell_surface *wl_shell_surface)
+ static inline void
+ wl_shell_surface_set_transient(struct wl_shell_surface *wl_shell_surface, struct wl_surface *parent, int32_t x, int32_t y, uint32_t flags)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_SET_TRANSIENT, parent, x, y, flags);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_SET_TRANSIENT, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, parent, x, y, flags);
+ }
+ 
+ /**
+@@ -3207,8 +3197,8 @@ wl_shell_surface_set_transient(struct wl_shell_surface *wl_shell_surface, struct
+ static inline void
+ wl_shell_surface_set_fullscreen(struct wl_shell_surface *wl_shell_surface, uint32_t method, uint32_t framerate, struct wl_output *output)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_SET_FULLSCREEN, method, framerate, output);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_SET_FULLSCREEN, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, method, framerate, output);
+ }
+ 
+ /**
+@@ -3237,8 +3227,8 @@ wl_shell_surface_set_fullscreen(struct wl_shell_surface *wl_shell_surface, uint3
+ static inline void
+ wl_shell_surface_set_popup(struct wl_shell_surface *wl_shell_surface, struct wl_seat *seat, uint32_t serial, struct wl_surface *parent, int32_t x, int32_t y, uint32_t flags)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_SET_POPUP, seat, serial, parent, x, y, flags);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_SET_POPUP, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, seat, serial, parent, x, y, flags);
+ }
+ 
+ /**
+@@ -3266,8 +3256,8 @@ wl_shell_surface_set_popup(struct wl_shell_surface *wl_shell_surface, struct wl_
+ static inline void
+ wl_shell_surface_set_maximized(struct wl_shell_surface *wl_shell_surface, struct wl_output *output)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_SET_MAXIMIZED, output);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_SET_MAXIMIZED, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, output);
+ }
+ 
+ /**
+@@ -3284,8 +3274,8 @@ wl_shell_surface_set_maximized(struct wl_shell_surface *wl_shell_surface, struct
+ static inline void
+ wl_shell_surface_set_title(struct wl_shell_surface *wl_shell_surface, const char *title)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_SET_TITLE, title);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_SET_TITLE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, title);
+ }
+ 
+ /**
+@@ -3301,8 +3291,8 @@ wl_shell_surface_set_title(struct wl_shell_surface *wl_shell_surface, const char
+ static inline void
+ wl_shell_surface_set_class(struct wl_shell_surface *wl_shell_surface, const char *class_)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_shell_surface,
+-			 WL_SHELL_SURFACE_SET_CLASS, class_);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_shell_surface,
++			 WL_SHELL_SURFACE_SET_CLASS, NULL, wl_proxy_get_version((struct wl_proxy *) wl_shell_surface), 0, class_);
+ }
+ 
+ #ifndef WL_SURFACE_ERROR_ENUM
+@@ -3457,10 +3447,8 @@ wl_surface_get_version(struct wl_surface *wl_surface)
+ static inline void
+ wl_surface_destroy(struct wl_surface *wl_surface)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_surface);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -3509,8 +3497,8 @@ wl_surface_destroy(struct wl_surface *wl_surface)
+ static inline void
+ wl_surface_attach(struct wl_surface *wl_surface, struct wl_buffer *buffer, int32_t x, int32_t y)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_ATTACH, buffer, x, y);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_ATTACH, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, buffer, x, y);
+ }
+ 
+ /**
+@@ -3541,8 +3529,8 @@ wl_surface_attach(struct wl_surface *wl_surface, struct wl_buffer *buffer, int32
+ static inline void
+ wl_surface_damage(struct wl_surface *wl_surface, int32_t x, int32_t y, int32_t width, int32_t height)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_DAMAGE, x, y, width, height);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_DAMAGE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, x, y, width, height);
+ }
+ 
+ /**
+@@ -3586,8 +3574,8 @@ wl_surface_frame(struct wl_surface *wl_surface)
+ {
+ 	struct wl_proxy *callback;
+ 
+-	callback = wl_proxy_marshal_constructor((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_FRAME, &wl_callback_interface, NULL);
++	callback = wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_FRAME, &wl_callback_interface, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, NULL);
+ 
+ 	return (struct wl_callback *) callback;
+ }
+@@ -3623,8 +3611,8 @@ wl_surface_frame(struct wl_surface *wl_surface)
+ static inline void
+ wl_surface_set_opaque_region(struct wl_surface *wl_surface, struct wl_region *region)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_SET_OPAQUE_REGION, region);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_SET_OPAQUE_REGION, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, region);
+ }
+ 
+ /**
+@@ -3656,8 +3644,8 @@ wl_surface_set_opaque_region(struct wl_surface *wl_surface, struct wl_region *re
+ static inline void
+ wl_surface_set_input_region(struct wl_surface *wl_surface, struct wl_region *region)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_SET_INPUT_REGION, region);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_SET_INPUT_REGION, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, region);
+ }
+ 
+ /**
+@@ -3684,8 +3672,8 @@ wl_surface_set_input_region(struct wl_surface *wl_surface, struct wl_region *reg
+ static inline void
+ wl_surface_commit(struct wl_surface *wl_surface)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_COMMIT);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_COMMIT, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0);
+ }
+ 
+ /**
+@@ -3724,8 +3712,8 @@ wl_surface_commit(struct wl_surface *wl_surface)
+ static inline void
+ wl_surface_set_buffer_transform(struct wl_surface *wl_surface, int32_t transform)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_SET_BUFFER_TRANSFORM, transform);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_SET_BUFFER_TRANSFORM, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, transform);
+ }
+ 
+ /**
+@@ -3758,8 +3746,8 @@ wl_surface_set_buffer_transform(struct wl_surface *wl_surface, int32_t transform
+ static inline void
+ wl_surface_set_buffer_scale(struct wl_surface *wl_surface, int32_t scale)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_SET_BUFFER_SCALE, scale);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_SET_BUFFER_SCALE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, scale);
+ }
+ 
+ /**
+@@ -3801,8 +3789,8 @@ wl_surface_set_buffer_scale(struct wl_surface *wl_surface, int32_t scale)
+ static inline void
+ wl_surface_damage_buffer(struct wl_surface *wl_surface, int32_t x, int32_t y, int32_t width, int32_t height)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_surface,
+-			 WL_SURFACE_DAMAGE_BUFFER, x, y, width, height);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_surface,
++			 WL_SURFACE_DAMAGE_BUFFER, NULL, wl_proxy_get_version((struct wl_proxy *) wl_surface), 0, x, y, width, height);
+ }
+ 
+ #ifndef WL_SEAT_CAPABILITY_ENUM
+@@ -3967,8 +3955,8 @@ wl_seat_get_pointer(struct wl_seat *wl_seat)
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_seat,
+-			 WL_SEAT_GET_POINTER, &wl_pointer_interface, NULL);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_seat,
++			 WL_SEAT_GET_POINTER, &wl_pointer_interface, wl_proxy_get_version((struct wl_proxy *) wl_seat), 0, NULL);
+ 
+ 	return (struct wl_pointer *) id;
+ }
+@@ -3989,8 +3977,8 @@ wl_seat_get_keyboard(struct wl_seat *wl_seat)
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_seat,
+-			 WL_SEAT_GET_KEYBOARD, &wl_keyboard_interface, NULL);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_seat,
++			 WL_SEAT_GET_KEYBOARD, &wl_keyboard_interface, wl_proxy_get_version((struct wl_proxy *) wl_seat), 0, NULL);
+ 
+ 	return (struct wl_keyboard *) id;
+ }
+@@ -4011,8 +3999,8 @@ wl_seat_get_touch(struct wl_seat *wl_seat)
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_seat,
+-			 WL_SEAT_GET_TOUCH, &wl_touch_interface, NULL);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_seat,
++			 WL_SEAT_GET_TOUCH, &wl_touch_interface, wl_proxy_get_version((struct wl_proxy *) wl_seat), 0, NULL);
+ 
+ 	return (struct wl_touch *) id;
+ }
+@@ -4026,10 +4014,8 @@ wl_seat_get_touch(struct wl_seat *wl_seat)
+ static inline void
+ wl_seat_release(struct wl_seat *wl_seat)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_seat,
+-			 WL_SEAT_RELEASE);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_seat);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_seat,
++			 WL_SEAT_RELEASE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_seat), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #ifndef WL_POINTER_ERROR_ENUM
+@@ -4095,16 +4081,6 @@ enum wl_pointer_axis {
+  * from a "finger" source may be in a smooth coordinate space with
+  * kinetic scrolling whereas a "wheel" source may be in discrete steps
+  * of a number of lines.
+- *
+- * The "continuous" axis source is a device generating events in a
+- * continuous coordinate space, but using something other than a
+- * finger. One example for this source is button-based scrolling where
+- * the vertical motion of a device is converted to scroll events while
+- * a button is held down.
+- *
+- * The "wheel tilt" axis source indicates that the actual device is a
+- * wheel but the scroll event is not caused by a rotation but a
+- * (usually sideways) tilt of the wheel.
+  */
+ enum wl_pointer_axis_source {
+ 	/**
+@@ -4117,10 +4093,20 @@ enum wl_pointer_axis_source {
+ 	WL_POINTER_AXIS_SOURCE_FINGER = 1,
+ 	/**
+ 	 * continuous coordinate space
++	 *
++	 * A device generating events in a continuous coordinate space,
++	 * but using something other than a finger. One example for this
++	 * source is button-based scrolling where the vertical motion of a
++	 * device is converted to scroll events while a button is held
++	 * down.
+ 	 */
+ 	WL_POINTER_AXIS_SOURCE_CONTINUOUS = 2,
+ 	/**
+ 	 * a physical wheel tilt
++	 *
++	 * Indicates that the actual device is a wheel but the scroll
++	 * event is not caused by a rotation but a (usually sideways) tilt
++	 * of the wheel.
+ 	 * @since 6
+ 	 */
+ 	WL_POINTER_AXIS_SOURCE_WHEEL_TILT = 3,
+@@ -4506,8 +4492,8 @@ wl_pointer_destroy(struct wl_pointer *wl_pointer)
+ static inline void
+ wl_pointer_set_cursor(struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface, int32_t hotspot_x, int32_t hotspot_y)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_pointer,
+-			 WL_POINTER_SET_CURSOR, serial, surface, hotspot_x, hotspot_y);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_pointer,
++			 WL_POINTER_SET_CURSOR, NULL, wl_proxy_get_version((struct wl_proxy *) wl_pointer), 0, serial, surface, hotspot_x, hotspot_y);
+ }
+ 
+ /**
+@@ -4522,10 +4508,8 @@ wl_pointer_set_cursor(struct wl_pointer *wl_pointer, uint32_t serial, struct wl_
+ static inline void
+ wl_pointer_release(struct wl_pointer *wl_pointer)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_pointer,
+-			 WL_POINTER_RELEASE);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_pointer);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_pointer,
++			 WL_POINTER_RELEASE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_pointer), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #ifndef WL_KEYBOARD_KEYMAP_FORMAT_ENUM
+@@ -4753,10 +4737,8 @@ wl_keyboard_destroy(struct wl_keyboard *wl_keyboard)
+ static inline void
+ wl_keyboard_release(struct wl_keyboard *wl_keyboard)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_keyboard,
+-			 WL_KEYBOARD_RELEASE);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_keyboard);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_keyboard,
++			 WL_KEYBOARD_RELEASE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_keyboard), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -4997,10 +4979,8 @@ wl_touch_destroy(struct wl_touch *wl_touch)
+ static inline void
+ wl_touch_release(struct wl_touch *wl_touch)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_touch,
+-			 WL_TOUCH_RELEASE);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_touch);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_touch,
++			 WL_TOUCH_RELEASE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_touch), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #ifndef WL_OUTPUT_SUBPIXEL_ENUM
+@@ -5282,10 +5262,8 @@ wl_output_destroy(struct wl_output *wl_output)
+ static inline void
+ wl_output_release(struct wl_output *wl_output)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_output,
+-			 WL_OUTPUT_RELEASE);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_output);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_output,
++			 WL_OUTPUT_RELEASE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_output), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #define WL_REGION_DESTROY 0
+@@ -5334,10 +5312,8 @@ wl_region_get_version(struct wl_region *wl_region)
+ static inline void
+ wl_region_destroy(struct wl_region *wl_region)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_region,
+-			 WL_REGION_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_region);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_region,
++			 WL_REGION_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_region), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -5348,8 +5324,8 @@ wl_region_destroy(struct wl_region *wl_region)
+ static inline void
+ wl_region_add(struct wl_region *wl_region, int32_t x, int32_t y, int32_t width, int32_t height)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_region,
+-			 WL_REGION_ADD, x, y, width, height);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_region,
++			 WL_REGION_ADD, NULL, wl_proxy_get_version((struct wl_proxy *) wl_region), 0, x, y, width, height);
+ }
+ 
+ /**
+@@ -5360,8 +5336,8 @@ wl_region_add(struct wl_region *wl_region, int32_t x, int32_t y, int32_t width,
+ static inline void
+ wl_region_subtract(struct wl_region *wl_region, int32_t x, int32_t y, int32_t width, int32_t height)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_region,
+-			 WL_REGION_SUBTRACT, x, y, width, height);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_region,
++			 WL_REGION_SUBTRACT, NULL, wl_proxy_get_version((struct wl_proxy *) wl_region), 0, x, y, width, height);
+ }
+ 
+ #ifndef WL_SUBCOMPOSITOR_ERROR_ENUM
+@@ -5417,10 +5393,8 @@ wl_subcompositor_get_version(struct wl_subcompositor *wl_subcompositor)
+ static inline void
+ wl_subcompositor_destroy(struct wl_subcompositor *wl_subcompositor)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_subcompositor,
+-			 WL_SUBCOMPOSITOR_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_subcompositor);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_subcompositor,
++			 WL_SUBCOMPOSITOR_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_subcompositor), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -5439,8 +5413,8 @@ wl_subcompositor_get_subsurface(struct wl_subcompositor *wl_subcompositor, struc
+ {
+ 	struct wl_proxy *id;
+ 
+-	id = wl_proxy_marshal_constructor((struct wl_proxy *) wl_subcompositor,
+-			 WL_SUBCOMPOSITOR_GET_SUBSURFACE, &wl_subsurface_interface, NULL, surface, parent);
++	id = wl_proxy_marshal_flags((struct wl_proxy *) wl_subcompositor,
++			 WL_SUBCOMPOSITOR_GET_SUBSURFACE, &wl_subsurface_interface, wl_proxy_get_version((struct wl_proxy *) wl_subcompositor), 0, NULL, surface, parent);
+ 
+ 	return (struct wl_subsurface *) id;
+ }
+@@ -5520,10 +5494,8 @@ wl_subsurface_get_version(struct wl_subsurface *wl_subsurface)
+ static inline void
+ wl_subsurface_destroy(struct wl_subsurface *wl_subsurface)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_subsurface,
+-			 WL_SUBSURFACE_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) wl_subsurface);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_subsurface,
++			 WL_SUBSURFACE_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) wl_subsurface), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ /**
+@@ -5549,8 +5521,8 @@ wl_subsurface_destroy(struct wl_subsurface *wl_subsurface)
+ static inline void
+ wl_subsurface_set_position(struct wl_subsurface *wl_subsurface, int32_t x, int32_t y)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_subsurface,
+-			 WL_SUBSURFACE_SET_POSITION, x, y);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_subsurface,
++			 WL_SUBSURFACE_SET_POSITION, NULL, wl_proxy_get_version((struct wl_proxy *) wl_subsurface), 0, x, y);
+ }
+ 
+ /**
+@@ -5575,8 +5547,8 @@ wl_subsurface_set_position(struct wl_subsurface *wl_subsurface, int32_t x, int32
+ static inline void
+ wl_subsurface_place_above(struct wl_subsurface *wl_subsurface, struct wl_surface *sibling)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_subsurface,
+-			 WL_SUBSURFACE_PLACE_ABOVE, sibling);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_subsurface,
++			 WL_SUBSURFACE_PLACE_ABOVE, NULL, wl_proxy_get_version((struct wl_proxy *) wl_subsurface), 0, sibling);
+ }
+ 
+ /**
+@@ -5588,8 +5560,8 @@ wl_subsurface_place_above(struct wl_subsurface *wl_subsurface, struct wl_surface
+ static inline void
+ wl_subsurface_place_below(struct wl_subsurface *wl_subsurface, struct wl_surface *sibling)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_subsurface,
+-			 WL_SUBSURFACE_PLACE_BELOW, sibling);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_subsurface,
++			 WL_SUBSURFACE_PLACE_BELOW, NULL, wl_proxy_get_version((struct wl_proxy *) wl_subsurface), 0, sibling);
+ }
+ 
+ /**
+@@ -5612,8 +5584,8 @@ wl_subsurface_place_below(struct wl_subsurface *wl_subsurface, struct wl_surface
+ static inline void
+ wl_subsurface_set_sync(struct wl_subsurface *wl_subsurface)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_subsurface,
+-			 WL_SUBSURFACE_SET_SYNC);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_subsurface,
++			 WL_SUBSURFACE_SET_SYNC, NULL, wl_proxy_get_version((struct wl_proxy *) wl_subsurface), 0);
+ }
+ 
+ /**
+@@ -5642,8 +5614,8 @@ wl_subsurface_set_sync(struct wl_subsurface *wl_subsurface)
+ static inline void
+ wl_subsurface_set_desync(struct wl_subsurface *wl_subsurface)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) wl_subsurface,
+-			 WL_SUBSURFACE_SET_DESYNC);
++	wl_proxy_marshal_flags((struct wl_proxy *) wl_subsurface,
++			 WL_SUBSURFACE_SET_DESYNC, NULL, wl_proxy_get_version((struct wl_proxy *) wl_subsurface), 0);
+ }
+ 
+ #ifdef  __cplusplus
+diff --git a/third_party/wayland/src/tests/data/example-server.h b/third_party/wayland/src/tests/data/example-server.h
+index 3311c5d..7cfa4e7 100644
+--- a/third_party/wayland/src/tests/data/example-server.h
++++ b/third_party/wayland/src/tests/data/example-server.h
+@@ -3304,16 +3304,6 @@ enum wl_pointer_axis {
+  * from a "finger" source may be in a smooth coordinate space with
+  * kinetic scrolling whereas a "wheel" source may be in discrete steps
+  * of a number of lines.
+- *
+- * The "continuous" axis source is a device generating events in a
+- * continuous coordinate space, but using something other than a
+- * finger. One example for this source is button-based scrolling where
+- * the vertical motion of a device is converted to scroll events while
+- * a button is held down.
+- *
+- * The "wheel tilt" axis source indicates that the actual device is a
+- * wheel but the scroll event is not caused by a rotation but a
+- * (usually sideways) tilt of the wheel.
+  */
+ enum wl_pointer_axis_source {
+ 	/**
+@@ -3326,10 +3316,20 @@ enum wl_pointer_axis_source {
+ 	WL_POINTER_AXIS_SOURCE_FINGER = 1,
+ 	/**
+ 	 * continuous coordinate space
++	 *
++	 * A device generating events in a continuous coordinate space,
++	 * but using something other than a finger. One example for this
++	 * source is button-based scrolling where the vertical motion of a
++	 * device is converted to scroll events while a button is held
++	 * down.
+ 	 */
+ 	WL_POINTER_AXIS_SOURCE_CONTINUOUS = 2,
+ 	/**
+ 	 * a physical wheel tilt
++	 *
++	 * Indicates that the actual device is a wheel but the scroll
++	 * event is not caused by a rotation but a (usually sideways) tilt
++	 * of the wheel.
+ 	 * @since 6
+ 	 */
+ 	WL_POINTER_AXIS_SOURCE_WHEEL_TILT = 3,
+diff --git a/third_party/wayland/src/tests/data/example.xml b/third_party/wayland/src/tests/data/example.xml
+index 29b63be..38feec3 100644
+--- a/third_party/wayland/src/tests/data/example.xml
++++ b/third_party/wayland/src/tests/data/example.xml
+@@ -1980,21 +1980,23 @@
+ 	from a "finger" source may be in a smooth coordinate space with
+ 	kinetic scrolling whereas a "wheel" source may be in discrete steps
+ 	of a number of lines.
+-
+-	The "continuous" axis source is a device generating events in a
+-	continuous coordinate space, but using something other than a
+-	finger. One example for this source is button-based scrolling where
+-	the vertical motion of a device is converted to scroll events while
+-	a button is held down.
+-
+-	The "wheel tilt" axis source indicates that the actual device is a
+-	wheel but the scroll event is not caused by a rotation but a
+-	(usually sideways) tilt of the wheel.
+       </description>
+       <entry name="wheel" value="0" summary="a physical wheel rotation" />
+       <entry name="finger" value="1" summary="finger on a touch surface" />
+-      <entry name="continuous" value="2" summary="continuous coordinate space"/>
+-      <entry name="wheel_tilt" value="3" summary="a physical wheel tilt" since="6"/>
++      <entry name="continuous" value="2">
++	<description summary="continuous coordinate space">
++	  A device generating events in a continuous coordinate space, but
++	  using something other than a finger. One example for this source
++	  is button-based scrolling where the vertical motion of a device
++	  is converted to scroll events while a button is held down.
++	</description>
++      </entry>
++      <entry name="wheel_tilt" value="3" since="6">
++	<description summary="a physical wheel tilt">
++	  Indicates that the actual device is a wheel but the scroll event is
++	  not caused by a rotation but a (usually sideways) tilt of the wheel.
++	</description>
++      </entry>
+     </enum>
+ 
+     <event name="axis_source" since="5">
+diff --git a/third_party/wayland/src/tests/data/small-client-core.h b/third_party/wayland/src/tests/data/small-client-core.h
+index d424757..348d2dc 100644
+--- a/third_party/wayland/src/tests/data/small-client-core.h
++++ b/third_party/wayland/src/tests/data/small-client-core.h
+@@ -159,8 +159,8 @@ intf_A_rq1(struct intf_A *intf_A, const struct wl_interface *interface, uint32_t
+ {
+ 	struct wl_proxy *untyped_new;
+ 
+-	untyped_new = wl_proxy_marshal_constructor_versioned((struct wl_proxy *) intf_A,
+-			 INTF_A_RQ1, interface, version, interface->name, version, NULL);
++	untyped_new = wl_proxy_marshal_flags((struct wl_proxy *) intf_A,
++			 INTF_A_RQ1, interface, version, 0, interface->name, version, NULL);
+ 
+ 	return (void *) untyped_new;
+ }
+@@ -173,8 +173,8 @@ intf_A_rq2(struct intf_A *intf_A, const char *str, int32_t i, uint32_t u, wl_fix
+ {
+ 	struct wl_proxy *typed_new;
+ 
+-	typed_new = wl_proxy_marshal_constructor((struct wl_proxy *) intf_A,
+-			 INTF_A_RQ2, &intf_not_here_interface, NULL, str, i, u, f, fd, obj);
++	typed_new = wl_proxy_marshal_flags((struct wl_proxy *) intf_A,
++			 INTF_A_RQ2, &intf_not_here_interface, wl_proxy_get_version((struct wl_proxy *) intf_A), 0, NULL, str, i, u, f, fd, obj);
+ 
+ 	return (struct intf_not_here *) typed_new;
+ }
+@@ -185,10 +185,8 @@ intf_A_rq2(struct intf_A *intf_A, const char *str, int32_t i, uint32_t u, wl_fix
+ static inline void
+ intf_A_destroy(struct intf_A *intf_A)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) intf_A,
+-			 INTF_A_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) intf_A);
++	wl_proxy_marshal_flags((struct wl_proxy *) intf_A,
++			 INTF_A_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) intf_A), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #ifdef  __cplusplus
+diff --git a/third_party/wayland/src/tests/data/small-client.h b/third_party/wayland/src/tests/data/small-client.h
+index 2a1f961..8c6abc5 100644
+--- a/third_party/wayland/src/tests/data/small-client.h
++++ b/third_party/wayland/src/tests/data/small-client.h
+@@ -159,8 +159,8 @@ intf_A_rq1(struct intf_A *intf_A, const struct wl_interface *interface, uint32_t
+ {
+ 	struct wl_proxy *untyped_new;
+ 
+-	untyped_new = wl_proxy_marshal_constructor_versioned((struct wl_proxy *) intf_A,
+-			 INTF_A_RQ1, interface, version, interface->name, version, NULL);
++	untyped_new = wl_proxy_marshal_flags((struct wl_proxy *) intf_A,
++			 INTF_A_RQ1, interface, version, 0, interface->name, version, NULL);
+ 
+ 	return (void *) untyped_new;
+ }
+@@ -173,8 +173,8 @@ intf_A_rq2(struct intf_A *intf_A, const char *str, int32_t i, uint32_t u, wl_fix
+ {
+ 	struct wl_proxy *typed_new;
+ 
+-	typed_new = wl_proxy_marshal_constructor((struct wl_proxy *) intf_A,
+-			 INTF_A_RQ2, &intf_not_here_interface, NULL, str, i, u, f, fd, obj);
++	typed_new = wl_proxy_marshal_flags((struct wl_proxy *) intf_A,
++			 INTF_A_RQ2, &intf_not_here_interface, wl_proxy_get_version((struct wl_proxy *) intf_A), 0, NULL, str, i, u, f, fd, obj);
+ 
+ 	return (struct intf_not_here *) typed_new;
+ }
+@@ -185,10 +185,8 @@ intf_A_rq2(struct intf_A *intf_A, const char *str, int32_t i, uint32_t u, wl_fix
+ static inline void
+ intf_A_destroy(struct intf_A *intf_A)
+ {
+-	wl_proxy_marshal((struct wl_proxy *) intf_A,
+-			 INTF_A_DESTROY);
+-
+-	wl_proxy_destroy((struct wl_proxy *) intf_A);
++	wl_proxy_marshal_flags((struct wl_proxy *) intf_A,
++			 INTF_A_DESTROY, NULL, wl_proxy_get_version((struct wl_proxy *) intf_A), WL_MARSHAL_FLAG_DESTROY);
+ }
+ 
+ #ifdef  __cplusplus
+diff --git a/third_party/wayland/src/tests/display-test.c b/third_party/wayland/src/tests/display-test.c
+index 3db7c95..763adc9 100644
+--- a/third_party/wayland/src/tests/display-test.c
++++ b/third_party/wayland/src/tests/display-test.c
+@@ -1629,3 +1629,24 @@ TEST(global_remove)
+ 
+ 	display_destroy(d);
+ }
++
++static void
++terminate_display(void *arg)
++{
++	struct wl_display *wl_display = arg;
++	wl_display_terminate(wl_display);
++}
++
++TEST(no_source_terminate)
++{
++	struct display *d;
++	struct wl_event_loop *loop;
++
++	d = display_create();
++	loop = wl_display_get_event_loop(d->wl_display);
++
++	wl_event_loop_add_idle(loop, terminate_display, d->wl_display);
++
++	display_run(d);
++	display_destroy(d);
++}
+diff --git a/third_party/wayland/src/tests/event-loop-test.c b/third_party/wayland/src/tests/event-loop-test.c
+index cbeaf8e..9d43c91 100644
+--- a/third_party/wayland/src/tests/event-loop-test.c
++++ b/third_party/wayland/src/tests/event-loop-test.c
+@@ -168,10 +168,22 @@ TEST(event_loop_signal)
+ 					  signal_callback, &got_it);
+ 	assert(source);
+ 
+-	wl_event_loop_dispatch(loop, 0);
++	assert(wl_event_loop_dispatch(loop, 0) == 0);
+ 	assert(!got_it);
+-	kill(getpid(), SIGUSR1);
+-	wl_event_loop_dispatch(loop, 0);
++	assert(kill(getpid(), SIGUSR1) == 0);
++	/*
++	 * On Linux the signal will be immediately visible in the epoll_wait()
++	 * call. However, on FreeBSD we may need a small delay between kill()
++	 * call and the signal being visible to the kevent() call. This
++	 * sometimes happens when the signal processing and kevent processing
++	 * runs on different CPUs, so becomes more likely when the system is
++	 * under load (e.g. running all tests in parallel).
++	 * See https://github.com/jiixyj/epoll-shim/pull/32
++	 * Passing 1ms as the timeout appears to avoid this race condition in
++	 * all cases tested so far, but to be safe we use 1000ms which should
++	 * be enough time even on a really slow (or emulated) system.
++	 */
++	assert(wl_event_loop_dispatch(loop, 1000) == 0);
+ 	assert(got_it == 1);
+ 
+ 	wl_event_source_remove(source);
+@@ -199,8 +211,12 @@ TEST(event_loop_multiple_same_signals)
+ 	/* Try it more times */
+ 	for (i = 0; i < 5; ++i) {
+ 		calls_no = 0;
+-		kill(getpid(), SIGUSR1);
+-		assert(wl_event_loop_dispatch(loop, 0) == 0);
++		assert(kill(getpid(), SIGUSR1) == 0);
++		/*
++		 * We need a non-zero timeout here to allow the test to pass
++		 * on non-Linux systems (see comment in event_loop_signal).
++		 */
++		assert(wl_event_loop_dispatch(loop, 1000) == 0);
+ 		assert(calls_no == 2);
+ 	}
+ 
+@@ -208,8 +224,12 @@ TEST(event_loop_multiple_same_signals)
+ 
+ 	/* Try it again  with one source */
+ 	calls_no = 0;
+-	kill(getpid(), SIGUSR1);
+-	assert(wl_event_loop_dispatch(loop, 0) == 0);
++	assert(kill(getpid(), SIGUSR1) == 0);
++	/*
++	 * We need a non-zero timeout here to allow the test to pass
++	 * on non-Linux systems (see comment in event_loop_signal).
++	 */
++	assert(wl_event_loop_dispatch(loop, 1000) == 0);
+ 	assert(calls_no == 1);
+ 
+ 	wl_event_source_remove(s2);
+diff --git a/third_party/wayland/src/tests/map-test.c b/third_party/wayland/src/tests/map-test.c
+index 8ecc1aa..03568ea 100644
+--- a/third_party/wayland/src/tests/map-test.c
++++ b/third_party/wayland/src/tests/map-test.c
+@@ -119,3 +119,19 @@ TEST(map_flags)
+ 
+ 	wl_map_release(&map);
+ }
++
++static enum wl_iterator_result never_run(void *element, void *data, uint32_t flags)
++{
++	assert(0);
++}
++
++TEST(map_iter_empty)
++{
++	struct wl_map map;
++
++	wl_map_init(&map, WL_MAP_SERVER_SIDE);
++
++	wl_map_for_each(&map, never_run, NULL);
++
++	wl_map_release(&map);
++}
+diff --git a/third_party/wayland/src/tests/meson.build b/third_party/wayland/src/tests/meson.build
+index a32ac50..58794e7 100644
+--- a/third_party/wayland/src/tests/meson.build
++++ b/third_party/wayland/src/tests/meson.build
+@@ -9,6 +9,7 @@ test_runner = static_library(
+ 	dependencies: [
+ 		cc.find_library('dl', required: false),
+ 		dependency('threads'),
++		epoll_dep,
+ 		ffi_dep,
+ 		wayland_util_dep,
+ 		wayland_private_dep,
+@@ -64,15 +65,17 @@ executable(
+ 	dependencies: test_runner_dep
+ )
+ 
+-test(
+-	'cpp-compile-test',
+-	executable(
++if add_languages('cpp')
++	test(
+ 		'cpp-compile-test',
+-		'cpp-compile-test.cpp',
+-		wayland_server_protocol_h,
+-		include_directories: src_inc
++		executable(
++			'cpp-compile-test',
++			'cpp-compile-test.cpp',
++			wayland_server_protocol_h,
++			include_directories: src_inc
++		)
+ 	)
+-)
++endif
+ 
+ sed_path = find_program('sed').path()
+ 
+@@ -152,7 +155,7 @@ tests = {
+ 
+ foreach test_name, test_extra_sources: tests
+ 	test_sources = [ test_name + '.c' ] + test_extra_sources
+-	test_deps = [test_runner_dep]
++	test_deps = [test_runner_dep, epoll_dep]
+ 	bin = executable(test_name, test_sources, dependencies: test_deps)
+ 	test(
+ 		test_name,
+diff --git a/third_party/wayland/src/tests/os-wrappers-test.c b/third_party/wayland/src/tests/os-wrappers-test.c
+index 102622c..aadb93b 100644
+--- a/third_party/wayland/src/tests/os-wrappers-test.c
++++ b/third_party/wayland/src/tests/os-wrappers-test.c
+@@ -23,6 +23,7 @@
+  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  * SOFTWARE.
+  */
++#include "../config.h"
+ 
+ #define _GNU_SOURCE
+ 
+@@ -46,26 +47,44 @@
+ 
+ static int fall_back;
+ 
+-static int (*real_socket)(int, int, int);
+-static int wrapped_calls_socket;
++/* Play nice with sanitizers
++ *
++ * Sanitizers need to intercept syscalls in the compiler run-time library. As
++ * this isn't a separate ELF object, the usual dlsym(RTLD_NEXT) approach won't
++ * work: there can only be one function named "socket" etc. To support this, the
++ * sanitizer library names its interceptors with the prefix __interceptor_ ("__"
++ * being reserved for the implementation) and then weakly aliases it to the real
++ * function. The functions we define below will override the weak alias, and we
++ * can call them by the __interceptor_ name directly. This allows the sanitizer
++ * to do its work before calling the next version of the function via dlsym.
++ *
++ * However! We also don't know which of these functions the sanitizer actually
++ * wants to override, so we have to declare our own weak symbols for
++ * __interceptor_ and check at run time if they linked to anything or not.
++*/
+ 
+-static int (*real_fcntl)(int, int, ...);
+-static int wrapped_calls_fcntl;
++#define DECL(ret_type, func, ...) \
++	ret_type __interceptor_ ## func(__VA_ARGS__) __attribute__((weak)); \
++	static ret_type (*real_ ## func)(__VA_ARGS__);			\
++	static int wrapped_calls_ ## func;
+ 
+-static ssize_t (*real_recvmsg)(int, struct msghdr *, int);
+-static int wrapped_calls_recvmsg;
++#define REAL(func) (__interceptor_ ## func) ?				\
++	__interceptor_ ## func :					\
++	(typeof(&__interceptor_ ## func))dlsym(RTLD_NEXT, #func)
+ 
+-static int (*real_epoll_create1)(int);
+-static int wrapped_calls_epoll_create1;
++DECL(int, socket, int, int, int);
++DECL(int, fcntl, int, int, ...);
++DECL(ssize_t, recvmsg, int, struct msghdr *, int);
++DECL(int, epoll_create1, int);
+ 
+ static void
+ init_fallbacks(int do_fallbacks)
+ {
+ 	fall_back = do_fallbacks;
+-	real_socket = dlsym(RTLD_NEXT, "socket");
+-	real_fcntl = dlsym(RTLD_NEXT, "fcntl");
+-	real_recvmsg = dlsym(RTLD_NEXT, "recvmsg");
+-	real_epoll_create1 = dlsym(RTLD_NEXT, "epoll_create1");
++	real_socket = REAL(socket);
++	real_fcntl = REAL(fcntl);
++	real_recvmsg = REAL(recvmsg);
++	real_epoll_create1 = REAL(epoll_create1);
+ }
+ 
+ __attribute__ ((visibility("default"))) int
+@@ -82,10 +101,11 @@ socket(int domain, int type, int protocol)
+ }
+ 
+ __attribute__ ((visibility("default"))) int
+-fcntl(int fd, int cmd, ...)
++(fcntl)(int fd, int cmd, ...)
+ {
+ 	va_list ap;
+-	void *arg;
++	int arg;
++	int has_arg;
+ 
+ 	wrapped_calls_fcntl++;
+ 
+@@ -93,12 +113,27 @@ fcntl(int fd, int cmd, ...)
+ 		errno = EINVAL;
+ 		return -1;
+ 	}
++	switch (cmd) {
++	case F_DUPFD_CLOEXEC:
++	case F_DUPFD:
++	case F_SETFD:
++		va_start(ap, cmd);
++		arg = va_arg(ap, int);
++		has_arg = 1;
++		va_end(ap);
++		break;
++	case F_GETFD:
++		has_arg = 0;
++		break;
++	default:
++		fprintf(stderr, "Unexpected fctnl cmd %d\n", cmd);
++		abort();
++	}
+ 
+-	va_start(ap, cmd);
+-	arg = va_arg(ap, void*);
+-	va_end(ap);
+-
+-	return real_fcntl(fd, cmd, arg);
++	if (has_arg) {
++		return real_fcntl(fd, cmd, arg);
++	}
++	return real_fcntl(fd, cmd);
+ }
+ 
+ __attribute__ ((visibility("default"))) ssize_t
+@@ -307,7 +342,13 @@ do_os_wrappers_recvmsg_cloexec(int n)
+ 	struct marshal_data data;
+ 
+ 	data.nr_fds_begin = count_open_fds();
++#if HAVE_BROKEN_MSG_CMSG_CLOEXEC
++	/* We call the fallback directly on FreeBSD versions with a broken
++	 * MSG_CMSG_CLOEXEC, so we don't call the local recvmsg() wrapper. */
++	data.wrapped_calls = 0;
++#else
+ 	data.wrapped_calls = n;
++#endif
+ 
+ 	setup_marshal_data(&data);
+ 	data.nr_fds_conn = count_open_fds();
+diff --git a/third_party/wayland/src/tests/test-compositor.c b/third_party/wayland/src/tests/test-compositor.c
+index 468ee56..103ddc8 100644
+--- a/third_party/wayland/src/tests/test-compositor.c
++++ b/third_party/wayland/src/tests/test-compositor.c
+@@ -329,7 +329,6 @@ struct display *
+ display_create(void)
+ {
+ 	struct display *d = NULL;
+-	struct wl_global *g;
+ 	const char *socket_name;
+ 	int stat = 0;
+ 
+@@ -350,9 +349,10 @@ display_create(void)
+ 	wl_list_init(&d->waiting_for_resume);
+ 	d->wfr_num = 0;
+ 
+-	g = wl_global_create(d->wl_display, &test_compositor_interface,
+-			     1, d, tc_bind);
+-	assert(g && "Creating test global failed");
++	d->test_global = wl_global_create(d->wl_display,
++					  &test_compositor_interface,
++					  1, d, tc_bind);
++	assert(d->test_global && "Creating test global failed");
+ 
+ 	return d;
+ }
+@@ -410,6 +410,7 @@ display_destroy(struct display *d)
+ 		free(cl);
+ 	}
+ 
++	wl_global_destroy(d->test_global);
+ 	wl_display_destroy(d->wl_display);
+ 	free(d);
+ 
+diff --git a/third_party/wayland/src/tests/test-compositor.h b/third_party/wayland/src/tests/test-compositor.h
+index 180dad2..f763fef 100644
+--- a/third_party/wayland/src/tests/test-compositor.h
++++ b/third_party/wayland/src/tests/test-compositor.h
+@@ -46,6 +46,7 @@ struct client_info {
+ 
+ struct display {
+ 	struct wl_display *wl_display;
++	struct wl_global *test_global;
+ 
+ 	struct wl_list clients;
+ 	uint32_t clients_no;
+diff --git a/third_party/wayland/src/tests/test-helpers.c b/third_party/wayland/src/tests/test-helpers.c
+index 20b6690..3535744 100644
+--- a/third_party/wayland/src/tests/test-helpers.c
++++ b/third_party/wayland/src/tests/test-helpers.c
+@@ -41,6 +41,27 @@
+ 
+ #include "test-runner.h"
+ 
++#if defined(__FreeBSD__)
++#include <sys/sysctl.h>
++
++/*
++ * On FreeBSD, get file descriptor information using sysctl() since that does
++ * not depend on a mounted fdescfs (which provides /dev/fd/N for N > 2).
++ */
++int
++count_open_fds(void)
++{
++	int error;
++	int nfds;
++	int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_NFDS, 0 };
++	size_t len;
++
++	len = sizeof(nfds);
++	error = sysctl(mib, 4, &nfds, &len, NULL, 0);
++	assert(error == 0 && "sysctl KERN_PROC_NFDS failed.");
++	return nfds;
++}
++#else
+ int
+ count_open_fds(void)
+ {
+@@ -48,8 +69,12 @@ count_open_fds(void)
+ 	struct dirent *ent;
+ 	int count = 0;
+ 
+-	dir = opendir("/proc/self/fd");
+-	assert(dir && "opening /proc/self/fd failed.");
++	/*
++	 * Using /dev/fd instead of /proc/self/fd should allow this code to
++	 * work on non-Linux operating systems.
++	 */
++	dir = opendir("/dev/fd");
++	assert(dir && "opening /dev/fd failed.");
+ 
+ 	errno = 0;
+ 	while ((ent = readdir(dir))) {
+@@ -58,12 +83,13 @@ count_open_fds(void)
+ 			continue;
+ 		count++;
+ 	}
+-	assert(errno == 0 && "reading /proc/self/fd failed.");
++	assert(errno == 0 && "reading /dev/fd failed.");
+ 
+ 	closedir(dir);
+ 
+ 	return count;
+ }
++#endif
+ 
+ void
+ exec_fd_leak_check(int nr_expected_fds)
+diff --git a/third_party/wayland/src/tests/test-runner.c b/third_party/wayland/src/tests/test-runner.c
+index 8f08445..c0247b5 100644
+--- a/third_party/wayland/src/tests/test-runner.c
++++ b/third_party/wayland/src/tests/test-runner.c
+@@ -22,6 +22,7 @@
+  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  * SOFTWARE.
+  */
++#include "../config.h"
+ 
+ #define _GNU_SOURCE
+ 
+@@ -36,11 +37,16 @@
+ #include <dlfcn.h>
+ #include <errno.h>
+ #include <limits.h>
++#include <signal.h>
+ #include <sys/ptrace.h>
++#ifdef HAVE_SYS_PROCCTL_H
++#include <sys/procctl.h>
++#elif defined(HAVE_SYS_PRCTL_H)
+ #include <sys/prctl.h>
+ #ifndef PR_SET_PTRACER
+ # define PR_SET_PTRACER 0x59616d61
+ #endif
++#endif
+ 
+ #include "test-runner.h"
+ 
+@@ -226,6 +232,21 @@ stderr_reset_color(void)
+  * Returns: 1 if a debugger is confirmed present; 0 if no debugger is
+  * present or if it can't be determined.
+  */
++#if defined(HAVE_SYS_PROCCTL_H) && defined(PROC_TRACE_STATUS)
++static int
++is_debugger_attached(void)
++{
++	int rc;
++	int status;
++	rc = procctl(P_PID, getpid(), PROC_TRACE_STATUS, &status);
++	if (rc == -1) {
++		perror("procctl");
++		return 0;
++	}
++	/* -1=tracing disabled, 0=no debugger attached, >0=pid of debugger. */
++	return status > 0;
++}
++#elif defined(HAVE_SYS_PRCTL_H)
+ static int
+ is_debugger_attached(void)
+ {
+@@ -287,6 +308,7 @@ is_debugger_attached(void)
+ 
+ 	return rc;
+ }
++#endif
+ 
+ int main(int argc, char *argv[])
+ {
