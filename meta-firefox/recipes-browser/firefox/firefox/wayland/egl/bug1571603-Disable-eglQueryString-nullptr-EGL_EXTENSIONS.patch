@@ -20,9 +20,9 @@ diff --git a/gfx/gl/GLContextProviderEGL.cpp b/gfx/gl/GLContextProviderEGL.cpp
 index 0ee98f3fce..ac6f29a2eb 100644
 --- a/gfx/gl/GLContextProviderEGL.cpp
 +++ b/gfx/gl/GLContextProviderEGL.cpp
-@@ -525,10 +525,16 @@ void GLContextEGL::GetWSIInfo(nsCString* const out) const {
-   out->Append(
-       (const char*)mEgl->fQueryString(EGL_DISPLAY(), LOCAL_EGL_EXTENSIONS));
+@@ -558,11 +558,17 @@ void GLContextEGL::GetWSIInfo(nsCString* const out) const {
+   out->Append((const char*)mEgl->mLib->fQueryString(mEgl->mDisplay,
+                                                     LOCAL_EGL_EXTENSIONS));
  
 +#if 0
  #ifndef ANDROID  // This query will crash some old android.
@@ -31,12 +31,13 @@ index 0ee98f3fce..ac6f29a2eb 100644
 +  // client extension list on ANDROID or embedded linux (we mostly need it on
 +  // ANGLE), and we'd rather not crash.
    out->AppendLiteral("\nEGL_EXTENSIONS(nullptr): ");
-   out->Append((const char*)mEgl->fQueryString(nullptr, LOCAL_EGL_EXTENSIONS));
+   out->Append(
+       (const char*)mEgl->mLib->fQueryString(nullptr, LOCAL_EGL_EXTENSIONS));
  #endif
 +#endif
  }
  
- // hold a reference to the given surface
+ bool GLContextEGL::HasExtBufferAge() const {
 diff --git a/gfx/gl/GLLibraryEGL.cpp b/gfx/gl/GLLibraryEGL.cpp
 index 812a66c79e..679b5426e9 100644
 --- a/gfx/gl/GLLibraryEGL.cpp
@@ -56,3 +57,7 @@ index 812a66c79e..679b5426e9 100644
  #endif
  
    if (!rawExtString) {
+diff --git a/gfx/gl/GLContextProviderEGL.cpp b/gfx/gl/GLContextProviderEGL.cpp
+index 2bf6de6..6ada9a3 100644
+--- a/gfx/gl/GLContextProviderEGL.cpp
++++ b/gfx/gl/GLContextProviderEGL.cpp

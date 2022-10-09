@@ -4,13 +4,13 @@ Date: Mon, 21 Nov 2016 08:15:38 +0900
 Subject: [PATCH] Work around Debian bug #844357
 
 ---
- widget/gtk/mozgtk/gtk3/moz.build | 4 ++++
+ widget/gtk/mozgtk/moz.build | 4 ++++
  1 file changed, 4 insertions(+)
 
-diff --git a/widget/gtk/mozgtk/gtk3/moz.build b/widget/gtk/mozgtk/gtk3/moz.build
+diff --git a/widget/gtk/mozgtk/moz.build b/widget/gtk/mozgtk/moz.build
 index 4e9379565d..538ef1acfc 100644
---- a/widget/gtk/mozgtk/gtk3/moz.build
-+++ b/widget/gtk/mozgtk/gtk3/moz.build
+--- a/widget/gtk/mozgtk/moz.build
++++ b/widget/gtk/mozgtk/moz.build
 @@ -36,3 +36,7 @@ OS_LIBS += [
      'gdk-3',
  ]

@@ -11,25 +11,26 @@ This has the side effect to make these preferences there work again, and
 to disable the "set as default browser" dialog.
 
 ---
- toolkit/xre/nsXREDirProvider.cpp | 2 ++
- 1 file changed, 2 insertions(+)
+ toolkit/xre/nsXREDirProvider.cpp | 3 ++
+ 1 file changed, 3 insertions(+)
 
 diff --git a/toolkit/xre/nsXREDirProvider.cpp b/toolkit/xre/nsXREDirProvider.cpp
 index 4fd58c7585..c065b6fdc9 100644
 --- a/toolkit/xre/nsXREDirProvider.cpp
 +++ b/toolkit/xre/nsXREDirProvider.cpp
-@@ -848,6 +848,7 @@ static nsresult DeleteDirIfExists(nsIFile* dir) {
+@@ -765,6 +765,8 @@ static const char* const kAppendPrefDir[] = {"defaults", "preferences",
+ static const char* const kAppendBackgroundTasksPrefDir[] = {
+     "defaults", "backgroundtasks", nullptr};
+ #endif
++static const char *const kAppendSysPrefDir[] = {"defaults", "syspref",
++                                                nullptr};
  
- static const char* const kAppendPrefDir[] = {"defaults", "preferences",
-                                              nullptr};
-+static const char *const kAppendSysPrefDir[] = { "defaults", "syspref", nullptr };
- 
- #ifdef DEBUG_bsmedberg
- static void DumpFileArray(const char* key, nsCOMArray<nsIFile> dirs) {
-@@ -879,6 +880,7 @@ nsresult nsXREDirProvider::GetFilesInternal(const char* aProperty,
- 
-     LoadDirIntoArray(mXULAppDir, kAppendPrefDir, directories);
-     LoadDirsIntoArray(mAppBundleDirectories, kAppendPrefDir, directories);
+ nsresult nsXREDirProvider::GetFilesInternal(const char* aProperty,
+                                             nsISimpleEnumerator** aResult) {
+@@ -781,6 +783,7 @@ nsresult nsXREDirProvider::GetFilesInternal(const char* aProperty,
+       LoadDirIntoArray(mXULAppDir, kAppendBackgroundTasksPrefDir, directories);
+     }
+ #endif
 +    LoadDirIntoArray(mXULAppDir, kAppendSysPrefDir, directories);
  
      rv = NS_NewArrayEnumerator(aResult, directories, NS_GET_IID(nsIFile));
